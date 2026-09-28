@@ -1,0 +1,6 @@
+*.tr
+*.pcap
+*.xml
+*.o
+__pycache__/
+results/
