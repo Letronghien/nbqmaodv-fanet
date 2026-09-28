@@ -261,6 +261,12 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(false),
                           MakeBooleanAccessor(&RoutingProtocol::m_adaptReward),
                           MakeBooleanChecker())
+            .AddAttribute("UseRerrBump",
+                          "STEP4: raise epsilon on RERR / link break (paper Sec. 4.2); "
+                          "false reproduces the pre-fix behaviour",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&RoutingProtocol::m_useRerrBump),
+                          MakeBooleanChecker())
             .AddAttribute("PeriodicAdaptInterval", "Period for ε-decay + α recompute + reward-weight update",
                           TimeValue(Seconds(10.0)),
                           MakeTimeAccessor(&RoutingProtocol::m_periodicAdaptInterval),
@@ -2036,6 +2042,11 @@ RoutingProtocol::RecvError(Ptr<Packet> p, Ipv4Address src)
         SendRerrMessage(packet, precursors);
     }
     m_routingTable.InvalidateRoutesWithDst(unreachable);
+    // STEP4: RERR-triggered exploration (paper: eps_t = min(0.5, eps_t + 0.2))
+    if (m_useRerrBump && !unreachable.empty())
+    {
+        m_qtable.OnRouteError();
+    }
 }
 
 void
@@ -2204,6 +2215,11 @@ RoutingProtocol::SendRerrWhenBreaksLinkToNextHop(Ipv4Address nextHop)
         return;
     }
     toNextHop.GetPrecursors(precursors);
+    // STEP4: local link break -> RERR-triggered exploration
+    if (m_useRerrBump)
+    {
+        m_qtable.OnRouteError();
+    }
     rerrHeader.AddUnDestination(nextHop, toNextHop.GetSeqNo());
     m_routingTable.GetListOfDestinationWithNextHop(nextHop, unreachable);
     for (auto i = unreachable.begin(); i != unreachable.end();)

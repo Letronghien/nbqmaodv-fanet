@@ -288,6 +288,8 @@ class RoutingProtocol : public Ipv4RoutingProtocol
     RoutingTable m_routingTable;
   /// NBQMAODV: Self-adaptive Q-table
   QTable m_qtable;
+  /// STEP4: call QTable::OnRouteError() on RERR / link break
+  bool m_useRerrBump{true};
   /// NBQMAODV: max paths
   uint32_t m_maxPaths{3};
   /// NBQMAODV: initial Q-learning params (before adaptation)
