@@ -73,6 +73,14 @@ QTable::SetRewardWeights(double w1, double w2, double w3)
     m_w1Normal = w1; m_w2Normal = w2; m_w3Normal = w3;
 }
 
+void
+QTable::SetAdaptiveFlags(bool adaptEpsilon, bool adaptAlpha, bool adaptReward)
+{
+    m_adaptEpsilon = adaptEpsilon;
+    m_adaptAlpha = adaptAlpha;
+    m_adaptReward = adaptReward;
+}
+
 void QTable::SetLowEnergyThreshold(double frac) { m_lowEnergyThresh = frac; }
 void QTable::SetSensitivityLambda(double lambda) { m_lambda = lambda; }
 void QTable::SetSeqNoWindow(Time window) { m_seqNoWindow = window; }
@@ -85,6 +93,7 @@ void QTable::SetSeqNoWindow(Time window) { m_seqNoWindow = window; }
 void
 QTable::OnRouteError()
 {
+    if (!m_adaptEpsilon) return;   // STEP3: no RERR bump in QMAODV
     double oldEps = m_epsilon;
     m_epsilon = std::min(m_epsilonMax, m_epsilon + m_epsilonBump);
     NS_LOG_DEBUG("SAQM ε bump on RERR: " << oldEps << " → " << m_epsilon);
@@ -94,7 +103,9 @@ void
 QTable::PeriodicEpsilonDecay()
 {
     double oldEps = m_epsilon;
-    m_epsilon = std::max(m_epsilonMin, m_epsilon - m_epsilonStep);
+    // STEP3: SA-QMAODV keeps a floor eps_min; QMAODV (ICIT) decays down to 0
+    const double floorEps = m_adaptEpsilon ? m_epsilonMin : 0.0;
+    m_epsilon = std::max(floorEps, m_epsilon - m_epsilonStep);
     NS_LOG_DEBUG("SAQM ε decayed: " << oldEps << " → " << m_epsilon);
 }
 
@@ -127,6 +138,7 @@ void
 QTable::RecomputeAdaptiveAlpha()
 {
     // α_t = 0.1 + 0.8·(1 − exp(−λ·Δ_Seq))  ∈ [0.1, 0.9]
+    if (!m_adaptAlpha) return;     // STEP3: QMAODV keeps alpha = Alpha0
     uint32_t dSeq = GetDeltaSeq();
     double newAlpha = 0.1 + 0.8 * (1.0 - std::exp(-m_lambda * static_cast<double>(dSeq)));
     NS_LOG_DEBUG("SAQM α recomputed: ΔSeq=" << dSeq << " → α=" << newAlpha);
@@ -137,6 +149,7 @@ QTable::RecomputeAdaptiveAlpha()
 void
 QTable::RecomputeAdaptiveRewardWeights(double energyFraction)
 {
+    if (!m_adaptReward) return;    // STEP3: QMAODV keeps fixed weights
     bool lowEnergyNow = (energyFraction < m_lowEnergyThresh);
     if (lowEnergyNow != m_lowEnergyMode)
     {

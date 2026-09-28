@@ -207,20 +207,20 @@ RoutingProtocol::GetTypeId()
                           DoubleValue(0.9),
                           MakeDoubleAccessor(&RoutingProtocol::m_gamma),
                           MakeDoubleChecker<double>(0.0, 1.0))
-            .AddAttribute("Epsilon0", "Initial ε (will be adapted)",
-                          DoubleValue(0.3),
+            .AddAttribute("Epsilon0", "Initial ε (ICIT QMAODV: 0.5)",
+                          DoubleValue(0.5),
                           MakeDoubleAccessor(&RoutingProtocol::m_epsilon0),
                           MakeDoubleChecker<double>(0.0, 1.0))
-            .AddAttribute("RewardW1", "Reward weight for ACK_success",
-                          DoubleValue(0.5),
+            .AddAttribute("RewardW1", "Reward weight for ACK_success (ICIT: 0.6)",
+                          DoubleValue(0.6),
                           MakeDoubleAccessor(&RoutingProtocol::m_w1),
                           MakeDoubleChecker<double>())
             .AddAttribute("RewardW2", "Reward weight for 1/(delay+1)",
                           DoubleValue(0.4),
                           MakeDoubleAccessor(&RoutingProtocol::m_w2),
                           MakeDoubleChecker<double>())
-            .AddAttribute("RewardW3", "Reward weight for Energy_residual",
-                          DoubleValue(0.1),
+            .AddAttribute("RewardW3", "Reward weight for Energy_residual (ICIT: 0)",
+                          DoubleValue(0.0),
                           MakeDoubleAccessor(&RoutingProtocol::m_w3),
                           MakeDoubleChecker<double>())
             .AddAttribute("RewardW4",
@@ -246,6 +246,21 @@ RoutingProtocol::GetTypeId()
                           DoubleValue(0.20),
                           MakeDoubleAccessor(&RoutingProtocol::m_lowEnergyThreshold),
                           MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("AdaptiveEpsilon",
+                          "STEP3: RERR bump + floor 0.1 (true, SA) or plain decay to 0 (false, ICIT)",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_adaptEpsilon),
+                          MakeBooleanChecker())
+            .AddAttribute("AdaptiveAlpha",
+                          "STEP3: alpha_t from SeqNo dynamics (true, SA) or fixed Alpha0 (false, ICIT)",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_adaptAlpha),
+                          MakeBooleanChecker())
+            .AddAttribute("AdaptiveReward",
+                          "STEP3: energy-driven reward weights (true, SA) or fixed weights (false, ICIT)",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_adaptReward),
+                          MakeBooleanChecker())
             .AddAttribute("PeriodicAdaptInterval", "Period for ε-decay + α recompute + reward-weight update",
                           TimeValue(Seconds(10.0)),
                           MakeTimeAccessor(&RoutingProtocol::m_periodicAdaptInterval),
@@ -474,6 +489,7 @@ RoutingProtocol::Start()
   m_qtable.SetLearningParameters(m_alpha0, m_gamma, m_epsilon0);
   m_qtable.SetRewardWeights(m_w1, m_w2, m_w3);
   m_qtable.SetTdErrorParams(m_muTdError, m_kappaTdError);
+  m_qtable.SetAdaptiveFlags(m_adaptEpsilon, m_adaptAlpha, m_adaptReward);   // STEP3
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
   m_qtable.SetLowEnergyThreshold(m_lowEnergyThreshold);
   m_periodicAdaptEvent =

@@ -77,6 +77,15 @@ class QTable
     void SetRewardWeights(double w1, double w2, double w3, double w4) { SetRewardWeights(w1, w2, w3); }
     void SetTdErrorParams(double /*mu*/, double /*kappa*/) {}
 
+    // -------- STEP3: switches for the adaptive controller ---------------------
+    /**
+     * \brief Enable/disable each self-adaptive component.
+     * All false  -> QMAODV as published at ICIT 2025 (fixed alpha, fixed reward
+     *               weights, epsilon decays by m_epsilonStep per tick down to 0).
+     * All true   -> SA-QMAODV behaviour (unchanged).
+     */
+    void SetAdaptiveFlags(bool adaptEpsilon, bool adaptAlpha, bool adaptReward);
+
     // -------- Self-Adaptive controller --------------------------------------
     /**
      * \brief RERR-triggered ε bump (Eq. ε_t = min(0.5, ε_t + 0.2)).
@@ -185,6 +194,10 @@ class QTable
     double m_epsilon;     // current ε_t
     double m_w1, m_w2, m_w3;
     bool   m_lowEnergyMode;
+    // STEP3: adaptive-controller switches (default true = SA behaviour)
+    bool   m_adaptEpsilon{true};
+    bool   m_adaptAlpha{true};
+    bool   m_adaptReward{true};
 
     // ---- Adaptation knobs ----
     double m_epsilonMin;       // 0.10  (floor for ε_t)

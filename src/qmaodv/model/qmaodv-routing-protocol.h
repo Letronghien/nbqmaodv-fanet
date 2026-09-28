@@ -293,11 +293,15 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   /// SAQMAODV: initial Q-learning params (before adaptation)
   double m_alpha0{0.5};
   double m_gamma{0.9};
-  double m_epsilon0{0.3};
-  double m_w1{0.5};
+  double m_epsilon0{0.5};   // STEP3: ICIT value
+  double m_w1{0.6};   // STEP3: ICIT value
   double m_w2{0.4};
-  double m_w3{0.1};
+  double m_w3{0.0};   // STEP3: ICIT has no energy term
   double m_w4{0.2};
+  /// STEP3: adaptive-controller switches (QMAODV-ICIT baseline: all false)
+  bool m_adaptEpsilon{false};
+  bool m_adaptAlpha{false};
+  bool m_adaptReward{false};
   double      m_queueHighThresh{0.7};  // EA: queue high threshold
   double      m_queueLowThresh{0.3};   // EA: queue low threshold
   /// SAQMAODV: adaptive controller params
