@@ -77,7 +77,7 @@ Make(const AttrList& attrs)
 static std::unique_ptr<Ipv4RoutingHelper>
 MakeRouting(const std::string& proto, const AttrList& attrs)
 {
-    if (proto == "PMAODV")
+    if (proto == "PMAODV-AOMDV") // legacy AOMDV-based implementation (reference only)
         return Make<PmaodvHelper>(attrs);
     NS_FATAL_ERROR("Unknown protocol: " << proto);
     return nullptr;

@@ -86,6 +86,13 @@ class QTable
      */
     void SetAdaptiveFlags(bool adaptEpsilon, bool adaptAlpha, bool adaptReward);
 
+    /**
+     * \brief STEP7: next-hop selection policy.
+     * false -> epsilon-greedy on Q (QMAODV / SA-QMAODV);
+     * true  -> PMAODV: roulette wheel with p_i = (1/HC_i) / sum_k (1/HC_k).
+     */
+    void SetProbabilistic(bool on) { m_probabilistic = on; }
+
     // -------- Self-Adaptive controller --------------------------------------
     /**
      * \brief RERR-triggered ε bump (Eq. ε_t = min(0.5, ε_t + 0.2)).
@@ -203,6 +210,7 @@ class QTable
     bool   m_adaptEpsilon{true};
     bool   m_adaptAlpha{true};
     bool   m_adaptReward{true};
+    bool   m_probabilistic{false};   // STEP7: PMAODV policy
 
     // ---- Adaptation knobs ----
     double m_epsilonMin;       // 0.10  (floor for ε_t)

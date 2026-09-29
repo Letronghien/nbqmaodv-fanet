@@ -53,7 +53,7 @@ def jobs_for(exp, protos, a):
     return J
 
 
-MODS = {"AODV": "aodv", "PMAODV": "pmaodv", "QMAODV": "qmaodv", "SA-QMAODV": "saqmaodv", "NBQ-MAODV": "nbqmaodv"}
+MODS = {"AODV": "aodv", "PMAODV": "qmaodv", "PMAODV-AOMDV": "pmaodv", "QMAODV": "qmaodv", "SA-QMAODV": "saqmaodv", "NBQ-MAODV": "nbqmaodv"}
 
 
 def find_binaries(ns3, protos):

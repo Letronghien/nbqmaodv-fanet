@@ -79,6 +79,12 @@ MakeRouting(const std::string& proto, const AttrList& attrs)
 {
     if (proto == "QMAODV")
         return Make<QmaodvHelper>(attrs);
+    if (proto == "PMAODV") // STEP7: PMAODV = shared multipath AODV core + probabilistic policy
+    {
+        AttrList a = attrs;
+        a.insert(a.begin(), {"Policy", "Probabilistic"});
+        return Make<QmaodvHelper>(a);
+    }
     NS_FATAL_ERROR("Unknown protocol: " << proto);
     return nullptr;
 }

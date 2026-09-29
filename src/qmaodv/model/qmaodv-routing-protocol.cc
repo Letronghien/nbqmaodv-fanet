@@ -350,6 +350,12 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(false),
                           MakeBooleanAccessor(&RoutingProtocol::m_adaptReward),
                           MakeBooleanChecker())
+            .AddAttribute("Policy",
+                          "STEP7: next-hop selection policy: QLearning (QMAODV, epsilon-greedy "
+                          "on Q) or Probabilistic (PMAODV, p proportional to 1/HopCount)",
+                          StringValue("QLearning"),
+                          MakeStringAccessor(&RoutingProtocol::m_policy),
+                          MakeStringChecker())
             .AddAttribute("UseMacFeedback",
                           "STEP6: reward from the real MAC outcome (AckedMpdu/DroppedMpdu) and "
                           "measured one-hop delay (true) or the neighbour-freshness proxy (false)",
@@ -602,6 +608,9 @@ RoutingProtocol::Start()
   m_qtable.SetRewardWeights(m_w1, m_w2, m_w3);
   m_qtable.SetTdErrorParams(m_muTdError, m_kappaTdError);
   m_qtable.SetAdaptiveFlags(m_adaptEpsilon, m_adaptAlpha, m_adaptReward);   // STEP3
+  NS_ABORT_MSG_IF(m_policy != "QLearning" && m_policy != "Probabilistic",
+                  "Policy must be QLearning or Probabilistic, got " << m_policy);
+  m_qtable.SetProbabilistic(m_policy == "Probabilistic");                  // STEP7
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
   if (m_useMacFeedback)
   {

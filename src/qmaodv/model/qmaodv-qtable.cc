@@ -357,6 +357,23 @@ QTable::SelectEpsilonGreedy(const RoutingTableEntry& primary,
     if (cands.empty()) { out = primary; return false; }
     if (cands.size() == 1) { out = cands[0].rt; return true; }
 
+    // STEP7: PMAODV probabilistic selection (paper Eq. 1), p_i proportional to 1/HC_i
+    if (m_probabilistic)
+    {
+        double total = 0.0;
+        for (const auto& c : cands)
+            total += 1.0 / std::max<uint32_t>(1, c.rt.GetHop());
+        double u = m_uniform->GetValue(0.0, total);
+        double acc = 0.0;
+        for (const auto& c : cands)
+        {
+            acc += 1.0 / std::max<uint32_t>(1, c.rt.GetHop());
+            if (u < acc) { out = c.rt; return true; }
+        }
+        out = cands.back().rt;
+        return true;
+    }
+
     double u = m_uniform->GetValue(0.0, 1.0);
     if (u < m_epsilon)
     {
