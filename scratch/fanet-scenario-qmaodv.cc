@@ -97,6 +97,47 @@ static std::vector<bool> g_depleted;
 static uint32_t g_nDepleted = 0;
 static double g_firstDepletion = -1.0;
 static double g_lowThreshold = 0.10;
+// ---------- STEP8b: energy diagnostics (--energyDebug=1)
+static energy::DeviceEnergyModelContainer g_models;
+static NetDeviceContainer g_uavDev;
+
+static void
+EnergyReport()
+{
+    double t = Simulator::Now().GetSeconds();
+    double sumFrac = 0.0, sumRadio = 0.0;
+    uint32_t nOff = 0;
+    for (uint32_t i = 0; i < g_models.GetN(); ++i)
+    {
+        Ptr<energy::BasicEnergySource> src = g_sources[i];
+        Ptr<WifiRadioEnergyModel> m = DynamicCast<WifiRadioEnergyModel>(g_models.Get(i));
+        Ptr<WifiNetDevice> wd = DynamicCast<WifiNetDevice>(g_uavDev.Get(i));
+        double remain = src->GetRemainingEnergy();
+        double radioJ = m ? m->GetTotalEnergyConsumption() : -1.0;
+        bool off = wd && wd->GetPhy() && wd->GetPhy()->IsStateOff();
+        sumFrac += remain / src->GetInitialEnergy();
+        sumRadio += radioJ;
+        nOff += off ? 1 : 0;
+        if (i < 3)
+        {
+            std::cout << "# ENERGY t=" << t << " uav=" << i << " init=" << src->GetInitialEnergy()
+                      << " remainJ=" << remain << " radioJ=" << radioJ
+                      << " currentA=" << (m ? m->GetCurrentA() : -1.0)
+                      << " state=" << (m ? static_cast<int>(m->GetCurrentState()) : -1)
+                      << " phyOff=" << off << std::endl;
+        }
+    }
+    std::cout << "# ENERGY t=" << t << " ALL avgRemainFrac=" << sumFrac / g_models.GetN()
+              << " totalRadioJ=" << sumRadio << " phyOffCount=" << nOff
+              << " depletedCount=" << g_nDepleted << std::endl;
+}
+
+static void
+PeriodicEnergyReport(double period)
+{
+    EnergyReport();
+    Simulator::Schedule(Seconds(period), &PeriodicEnergyReport, period);
+}
 
 static void
 PollEnergy(double period)
@@ -125,6 +166,7 @@ main(int argc, char* argv[])
     double area = 1000.0, range = 250.0, vmin = 5.0, vmax = 20.0;
     double rate = 4.0, simTime = 200.0;
     double energyJ = 0.0; // STEP8: 0 = no energy model
+    bool energyDebug = false; // STEP8b
     uint32_t pktSize = 512;
     std::string routingAttrs = "";
 
@@ -140,6 +182,7 @@ main(int argc, char* argv[])
     cmd.AddValue("pktSize", "payload bytes", pktSize);
     cmd.AddValue("simTime", "simulation time (s)", simTime);
     cmd.AddValue("energyJ", "initial energy per UAV in J (0 = no energy model)", energyJ);
+    cmd.AddValue("energyDebug", "STEP8b: print energy diagnostics every 10 s and at the end", energyDebug);
     cmd.AddValue("routingAttrs", "routing attributes, e.g. \"MaxPaths=3;AdaptiveEpsilon=false\"", routingAttrs);
     cmd.Parse(argc, argv);
 
@@ -202,7 +245,10 @@ main(int argc, char* argv[])
         for (uint32_t i = 0; i < nUav; ++i)
             uavDev.Add(dev.Get(i));
         WifiRadioEnergyModelHelper radio; // depletion -> WifiPhy::SetOffMode
-        radio.Install(uavDev, sources);
+        g_models = radio.Install(uavDev, sources); // STEP8b: keep for diagnostics
+        g_uavDev = uavDev;
+        if (energyDebug)
+            Simulator::Schedule(Seconds(10.0), &PeriodicEnergyReport, 10.0);
         for (uint32_t i = 0; i < sources.GetN(); ++i)
             g_sources.push_back(DynamicCast<energy::BasicEnergySource>(sources.Get(i)));
         g_depleted.assign(g_sources.size(), false);
@@ -244,6 +290,8 @@ main(int argc, char* argv[])
 
     Simulator::Stop(Seconds(simTime + 1.0));
     Simulator::Run();
+    if (energyDebug && g_models.GetN() > 0)
+        EnergyReport(); // STEP8b: final snapshot (printed before the CSV line)
 
     // ---------- metrics (data flows towards the base station only)
     fm->CheckForLostPackets();
