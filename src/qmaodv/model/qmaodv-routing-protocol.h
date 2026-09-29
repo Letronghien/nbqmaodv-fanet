@@ -290,6 +290,8 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   QTable m_qtable;
   /// STEP4: call QTable::OnRouteError() on RERR / link break
   bool m_useRerrBump{true};
+  /// STEP5: epsilon-greedy next-hop selection at every forwarding node
+  bool m_hopByHop{true};
   /// SAQMAODV: max paths
   uint32_t m_maxPaths{3};
   /// SAQMAODV: initial Q-learning params (before adaptation)

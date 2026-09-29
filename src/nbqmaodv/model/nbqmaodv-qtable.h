@@ -134,9 +134,12 @@ class QTable
                        std::vector<RoutingTableEntry>& routes,
                        const RoutingTable* mainTable = nullptr) const;
 
+    /// STEP5: 'exclude' = previous hop of the packet (never chosen as next hop);
+    /// the default (unset) address excludes nothing.
     bool SelectEpsilonGreedy(const RoutingTableEntry& primary,
                              RoutingTableEntry& out,
-                             const RoutingTable* mainTable = nullptr);
+                             const RoutingTable* mainTable = nullptr,
+                             Ipv4Address exclude = Ipv4Address());
 
     /**
      * \brief Update Q for (dst, nextHop) using the *current* adaptive α_t and

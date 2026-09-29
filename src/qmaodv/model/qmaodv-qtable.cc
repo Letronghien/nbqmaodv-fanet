@@ -339,9 +339,20 @@ QTable::BuildCandidates(const RoutingTableEntry& primary,
 bool
 QTable::SelectEpsilonGreedy(const RoutingTableEntry& primary,
                             RoutingTableEntry& out,
-                            const RoutingTable* mainTable)
+                            const RoutingTable* mainTable,
+                            Ipv4Address exclude)
 {
     auto cands = BuildCandidates(primary, mainTable);
+    // STEP5: never send a packet straight back to its previous hop
+    if (exclude != Ipv4Address())
+    {
+        cands.erase(std::remove_if(cands.begin(),
+                                   cands.end(),
+                                   [&exclude](const QRecord& c) {
+                                       return c.rt.GetNextHop() == exclude;
+                                   }),
+                    cands.end());
+    }
     if (cands.empty()) { out = primary; return false; }
     if (cands.size() == 1) { out = cands[0].rt; return true; }
 

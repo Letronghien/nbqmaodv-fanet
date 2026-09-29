@@ -144,6 +144,41 @@ class DeferredRouteOutputTag : public Tag
 
 NS_OBJECT_ENSURE_REGISTERED(DeferredRouteOutputTag);
 
+/**
+ * \brief STEP5: carries the IPv4 address of the node that transmitted the data
+ * packet on the previous hop (information normally available from the MAC
+ * header). Used to avoid sending a packet straight back to the previous hop.
+ */
+class PrevHopTag : public Tag
+{
+  public:
+    PrevHopTag(Ipv4Address a = Ipv4Address())
+        : m_addr(a)
+    {
+    }
+
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::saqmaodv::PrevHopTag")
+                                .SetParent<Tag>()
+                                .SetGroupName("Saqmaodv")
+                                .AddConstructor<PrevHopTag>();
+        return tid;
+    }
+
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return 4; }
+    void Serialize(TagBuffer i) const override { i.WriteU32(m_addr.Get()); }
+    void Deserialize(TagBuffer i) override { m_addr = Ipv4Address(i.ReadU32()); }
+    void Print(std::ostream& os) const override { os << "PrevHopTag: " << m_addr; }
+    Ipv4Address Get() const { return m_addr; }
+
+  private:
+    Ipv4Address m_addr;
+};
+
+NS_OBJECT_ENSURE_REGISTERED(PrevHopTag);
+
 //-----------------------------------------------------------------------------
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
@@ -235,6 +270,12 @@ RoutingProtocol::GetTypeId()
                           DoubleValue(0.20),
                           MakeDoubleAccessor(&RoutingProtocol::m_lowEnergyThreshold),
                           MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("HopByHop",
+                          "STEP5: epsilon-greedy next-hop selection at every forwarding node "
+                          "(true) or only at the source (false, pre-fix behaviour)",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&RoutingProtocol::m_hopByHop),
+                          MakeBooleanChecker())
             .AddAttribute("UseRerrBump",
                           "STEP4: raise epsilon on RERR / link break (paper Sec. 4.2); "
                           "false reproduces the pre-fix behaviour",
@@ -518,6 +559,11 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         }
         route = chosenRt.GetRoute();
         NS_ASSERT(route);
+        if (m_hopByHop && p)
+        {
+            PrevHopTag self(chosenRt.GetInterface().GetLocal()); // STEP5
+            p->ReplacePacketTag(self);
+        }
         NS_LOG_DEBUG("Exist route to " << route->GetDestination() << " from interface "
                                        << route->GetSource());
         if (oif && route->GetOutputDevice() != oif)
@@ -733,6 +779,30 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
         if (toDst.GetFlag() == VALID)
         {
             Ptr<Ipv4Route> route = toDst.GetRoute();
+            Ptr<const Packet> out = p;
+            if (m_hopByHop)
+            {
+                // STEP5: epsilon-greedy selection at the forwarding node,
+                // excluding the previous hop; same per-packet Q-update as the source.
+                PrevHopTag prev;
+                Ipv4Address prevHop = p->PeekPacketTag(prev) ? prev.Get() : Ipv4Address();
+                RoutingTableEntry chosenRt = toDst;
+                m_qtable.SelectEpsilonGreedy(toDst, chosenRt, &m_routingTable, prevHop);
+                {
+                    RoutingTableEntry nbrCheck;
+                    bool fresh = m_routingTable.LookupRoute(chosenRt.GetNextHop(), nbrCheck)
+                                 && nbrCheck.GetFlag() == VALID
+                                 && nbrCheck.GetLifeTime() > Seconds(0);
+                    double ack    = fresh ? 1.0 : 0.0;
+                    double delayS = fresh ? 0.005 : 1.0;
+                    m_qtable.UpdateQValueOrCreate(chosenRt, ack, delayS, GetEnergyFraction());
+                }
+                route = chosenRt.GetRoute();
+                Ptr<Packet> copy = p->Copy();
+                PrevHopTag self(chosenRt.GetInterface().GetLocal());
+                copy->ReplacePacketTag(self);
+                out = copy;
+            }
             NS_LOG_LOGIC(route->GetSource() << " forwarding to " << dst << " from " << origin
                                             << " packet " << p->GetUid());
 
@@ -758,7 +828,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
             m_nb.Update(route->GetGateway(), m_activeRouteTimeout);
             m_nb.Update(toOrigin.GetNextHop(), m_activeRouteTimeout);
 
-            ucb(route, p, header);
+            ucb(route, out, header);
             return true;
         }
         else
