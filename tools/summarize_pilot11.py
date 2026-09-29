@@ -36,7 +36,7 @@ for mob in ("rwp", "gm"):
         rows.append((float(runs[0]["win"][w]["t"]), m(vals)))
     print(f"  {mob}: " + "  ".join(f"{t:.0f}s:{p:.0f}" for t, p in rows))
 print("\n=== P2 load (AODV, gm, 30 UAV, warm-up 60 s)   PDR% | pdrAlive | delay med/p95 ms | NRL | macAck | queue")
-for k, vs in sorted(grp("P2_").items(), key=lambda kv: (kv[0].split("_")[1], int(kv[0].split("_r")[1]))):
+for k, vs in sorted(grp("P2_").items(), key=lambda kv: (kv[0].split("_")[1], int(re.search(r"_r(\d+)$", kv[0]).group(1)))):
     print(f"  {k:18s} {m([v['pdr'] for v in vs]):6.1f} {m([float(v['pdrAlive']) for v in vs]):6.1f}"
           f" {m([float(v['delayMedMs']) for v in vs]):7.1f}/{m([float(v['delayP95Ms']) for v in vs]):7.1f}"
           f" {m([v['nrl'] for v in vs]):5.2f} {m([float(v['macAckRatio']) for v in vs]):5.3f} {m([float(v['avgMacQueue']) for v in vs]):6.2f}")
