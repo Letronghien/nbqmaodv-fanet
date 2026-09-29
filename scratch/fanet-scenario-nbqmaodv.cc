@@ -174,6 +174,7 @@ main(int argc, char* argv[])
     double rate = 4.0, simTime = 200.0;
     double energyJ = 0.0; // STEP8: 0 = no energy model
     bool energyDebug = false; // STEP8b
+    bool nsPredictiveOff = false; // STEP8d: true = original ns-3 predictive switch-to-OFF
     uint32_t pktSize = 512;
     std::string routingAttrs = "";
 
@@ -189,6 +190,10 @@ main(int argc, char* argv[])
     cmd.AddValue("pktSize", "payload bytes", pktSize);
     cmd.AddValue("simTime", "simulation time (s)", simTime);
     cmd.AddValue("energyJ", "initial energy per UAV in J (0 = no energy model)", energyJ);
+    cmd.AddValue("nsPredictiveOff",
+                 "STEP8d: keep ns-3's predictive switch-to-OFF of WifiRadioEnergyModel "
+                 "(needs the ns3-patches/wifi-radio-energy-model patch)",
+                 nsPredictiveOff);
     cmd.AddValue("energyDebug", "STEP8b: print energy diagnostics every 10 s and at the end", energyDebug);
     cmd.AddValue("routingAttrs", "routing attributes, e.g. \"MaxPaths=3;AdaptiveEpsilon=false\"", routingAttrs);
     cmd.Parse(argc, argv);
@@ -252,6 +257,8 @@ main(int argc, char* argv[])
         for (uint32_t i = 0; i < nUav; ++i)
             uavDev.Add(dev.Get(i));
         WifiRadioEnergyModelHelper radio; // depletion -> WifiPhy::SetOffMode
+        // STEP8d: depletion decided by the battery low threshold only (see ns3-patches/)
+        radio.Set("PredictiveSwitchToOff", BooleanValue(nsPredictiveOff));
         g_models = radio.Install(uavDev, sources); // STEP8b: keep for diagnostics
         g_uavDev = uavDev;
         if (energyDebug)

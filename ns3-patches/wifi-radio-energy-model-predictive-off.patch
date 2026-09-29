@@ -1,0 +1,70 @@
+diff --git a/src/wifi/model/wifi-radio-energy-model.cc b/src/wifi/model/wifi-radio-energy-model.cc
+index b1bb89c..d23bad3 100644
+--- a/src/wifi/model/wifi-radio-energy-model.cc
++++ b/src/wifi/model/wifi-radio-energy-model.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "wifi-tx-current-model.h"
+ 
++#include "ns3/boolean.h"
+ #include "ns3/energy-source.h"
+ #include "ns3/log.h"
+ #include "ns3/pointer.h"
+@@ -30,6 +31,16 @@ WifiRadioEnergyModel::GetTypeId()
+             .SetParent<DeviceEnergyModel>()
+             .SetGroupName("Energy")
+             .AddConstructor<WifiRadioEnergyModel>()
++            .AddAttribute("PredictiveSwitchToOff",
++                          "NBQ-FANET patch: if true (ns-3 default) the model schedules its own "
++                          "switch to OFF from a prediction of the remaining energy. This "
++                          "prediction fires early (observed at ~23% remaining) and does not turn "
++                          "the PHY off. If false, depletion is decided only by the energy "
++                          "source low-battery threshold, which calls the depletion callback "
++                          "(WifiPhy::SetOffMode by default).",
++                          BooleanValue(true),
++                          MakeBooleanAccessor(&WifiRadioEnergyModel::m_predictiveOff),
++                          MakeBooleanChecker())
+             .AddAttribute("IdleCurrentA",
+                           "The default radio Idle current in Ampere.",
+                           DoubleValue(0.273), // idle mode = 273mA
+@@ -109,6 +120,10 @@ WifiRadioEnergyModel::SetEnergySource(const Ptr<energy::EnergySource> source)
+     NS_ASSERT(source);
+     m_source = source;
+     m_switchToOffEvent.Cancel();
++    if (!m_predictiveOff)
++    {
++        return; // NBQ-FANET patch
++    }
+     const auto durationToOff = GetMaximumTimeInState(m_currentState);
+     m_switchToOffEvent = Simulator::Schedule(durationToOff,
+                                              &WifiRadioEnergyModel::ChangeState,
+@@ -290,7 +305,7 @@ WifiRadioEnergyModel::ChangeState(int newState)
+         return;
+     }
+ 
+-    if (newPhyState != WifiPhyState::OFF)
++    if (m_predictiveOff && newPhyState != WifiPhyState::OFF) // NBQ-FANET patch
+     {
+         m_switchToOffEvent.Cancel();
+         const auto durationToOff = GetMaximumTimeInState(newPhyState);
+@@ -366,7 +381,7 @@ WifiRadioEnergyModel::HandleEnergyChanged()
+ {
+     NS_LOG_FUNCTION(this);
+     NS_LOG_DEBUG("WifiRadioEnergyModel:Energy is changed!");
+-    if (m_currentState != WifiPhyState::OFF)
++    if (m_predictiveOff && m_currentState != WifiPhyState::OFF) // NBQ-FANET patch
+     {
+         m_switchToOffEvent.Cancel();
+         const auto durationToOff = GetMaximumTimeInState(m_currentState);
+diff --git a/src/wifi/model/wifi-radio-energy-model.h b/src/wifi/model/wifi-radio-energy-model.h
+index a1e4b83..0ac36fb 100644
+--- a/src/wifi/model/wifi-radio-energy-model.h
++++ b/src/wifi/model/wifi-radio-energy-model.h
+@@ -365,6 +365,7 @@ class WifiRadioEnergyModel : public energy::DeviceEnergyModel
+     Time m_lastUpdateTime;       ///< time stamp of previous energy update
+ 
+     uint8_t m_nPendingChangeState; ///< pending state change
++    bool m_predictiveOff{true};    ///< NBQ-FANET patch: predictive switch to OFF
+ 
+     /// Energy depletion callback
+     WifiRadioEnergyDepletionCallback m_energyDepletionCallback;
