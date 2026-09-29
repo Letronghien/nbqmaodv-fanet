@@ -98,6 +98,15 @@ static uint32_t g_nDepleted = 0;
 static double g_firstDepletion = -1.0;
 static double g_lowThreshold = 0.10;
 static double g_sumFracAtDeath = 0.0; // STEP8c: battery fraction when each UAV died
+static std::vector<bool> g_phyOffDone;  // STEP8e: PHY actually switched off
+
+// STEP8e: the energy source must not call WifiPhy::SetOffMode() directly: in ns-3.48 this can
+// happen in the middle of a reception, and the pending reception event then aborts with
+// "Invalid WifiPhy state OFF". PollEnergy() switches the PHY off safely instead.
+static void
+NoOpDepletion()
+{
+}
 // ---------- STEP8b: energy diagnostics (--energyDebug=1)
 static energy::DeviceEnergyModelContainer g_models;
 static NetDeviceContainer g_uavDev;
@@ -144,28 +153,38 @@ PeriodicEnergyReport(double period)
 static void
 PollEnergy(double period)
 {
-    // STEP8c: a UAV is depleted when (a) its WifiRadioEnergyModel has switched itself to
-    // OFF (ns-3 schedules this from its own remaining-energy prediction, WITHOUT turning
-    // the PHY off), or (b) the battery reaches the low-battery threshold. In both cases
-    // the real PHY is switched off here, so a depleted UAV can no longer send or receive.
+    // STEP8c/8e: a UAV dies when its battery reaches the low-battery threshold (or, with
+    // --nsPredictiveOff=1, when ns-3's energy model switches itself to OFF). Death is counted
+    // at that instant; the real PHY is switched off at the first poll where it is IDLE, so no
+    // transmission/reception is interrupted half-way (avoids an ns-3.48 abort).
     for (size_t i = 0; i < g_sources.size(); ++i)
     {
-        if (g_depleted[i])
-            continue;
-        double frac = g_sources[i]->GetRemainingEnergy() / g_sources[i]->GetInitialEnergy();
-        Ptr<WifiRadioEnergyModel> m =
-            (i < g_models.GetN()) ? DynamicCast<WifiRadioEnergyModel>(g_models.Get(i)) : nullptr;
-        bool modelOff = m && m->GetCurrentState() == WifiPhyState::OFF;
-        if (modelOff || frac <= g_lowThreshold + 1e-9)
+        Ptr<WifiNetDevice> wd = (i < g_uavDev.GetN()) ? DynamicCast<WifiNetDevice>(g_uavDev.Get(i)) : nullptr;
+        if (!g_depleted[i])
         {
-            g_depleted[i] = true;
-            ++g_nDepleted;
-            g_sumFracAtDeath += frac;
-            if (g_firstDepletion < 0)
-                g_firstDepletion = Simulator::Now().GetSeconds();
-            Ptr<WifiNetDevice> wd = (i < g_uavDev.GetN()) ? DynamicCast<WifiNetDevice>(g_uavDev.Get(i)) : nullptr;
-            if (wd && wd->GetPhy() && !wd->GetPhy()->IsStateOff())
-                wd->GetPhy()->SetOffMode();
+            double frac = g_sources[i]->GetRemainingEnergy() / g_sources[i]->GetInitialEnergy();
+            Ptr<WifiRadioEnergyModel> m =
+                (i < g_models.GetN()) ? DynamicCast<WifiRadioEnergyModel>(g_models.Get(i)) : nullptr;
+            bool modelOff = m && m->GetCurrentState() == WifiPhyState::OFF;
+            if (modelOff || frac <= g_lowThreshold + 1e-9)
+            {
+                g_depleted[i] = true;
+                ++g_nDepleted;
+                g_sumFracAtDeath += frac;
+                if (g_firstDepletion < 0)
+                    g_firstDepletion = Simulator::Now().GetSeconds();
+            }
+        }
+        if (g_depleted[i] && !g_phyOffDone[i] && wd && wd->GetPhy())
+        {
+            Ptr<WifiPhy> phy = wd->GetPhy();
+            if (phy->IsStateOff())
+                g_phyOffDone[i] = true;
+            else if (phy->IsStateIdle())
+            {
+                phy->SetOffMode();
+                g_phyOffDone[i] = true;
+            }
         }
     }
     Simulator::Schedule(Seconds(period), &PollEnergy, period);
@@ -265,6 +284,7 @@ main(int argc, char* argv[])
         WifiRadioEnergyModelHelper radio; // depletion -> WifiPhy::SetOffMode
         // STEP8d: depletion decided by the battery low threshold only (see ns3-patches/)
         radio.Set("PredictiveSwitchToOff", BooleanValue(nsPredictiveOff));
+        radio.SetDepletionCallback(MakeCallback(&NoOpDepletion)); // STEP8e
         g_models = radio.Install(uavDev, sources); // STEP8b: keep for diagnostics
         g_uavDev = uavDev;
         if (energyDebug)
@@ -272,6 +292,7 @@ main(int argc, char* argv[])
         for (uint32_t i = 0; i < sources.GetN(); ++i)
             g_sources.push_back(DynamicCast<energy::BasicEnergySource>(sources.Get(i)));
         g_depleted.assign(g_sources.size(), false);
+        g_phyOffDone.assign(g_sources.size(), false); // STEP8e
         Simulator::Schedule(Seconds(0.1), &PollEnergy, 0.1); // STEP8c: 0.1 s
     }
 
