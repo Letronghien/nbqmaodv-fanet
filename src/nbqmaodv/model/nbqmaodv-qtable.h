@@ -119,6 +119,8 @@ class QTable
     void SetSeqNoWindow(Time window);
     /// STEP6: delay normalisation 1/(1 + d/dRef); dRef <= 0 keeps the legacy 1/(d+1)
     void SetDelayRef(double dRefSeconds) { m_delayRef = dRefSeconds; }
+    /// STEP10b: floor of the periodic epsilon decay (default 0.10)
+    void SetEpsilonMin(double epsMin) { m_epsilonMin = epsMin; }
 
     // -------- STEP10: NBQ-MAODV neighbour-value bootstrapping ------------------
     /**

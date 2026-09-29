@@ -455,6 +455,11 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&RoutingProtocol::m_hopByHop),
                           MakeBooleanChecker())
+            .AddAttribute("EpsilonMin",
+                          "STEP10b: floor of the periodic epsilon decay (SA-QMAODV: 0.1)",
+                          DoubleValue(0.10),
+                          MakeDoubleAccessor(&RoutingProtocol::m_epsilonMin),
+                          MakeDoubleChecker<double>(0.0, 1.0))
             .AddAttribute("NeighbourBootstrap",
                           "STEP10: NBQ-MAODV learning rule (bootstrap from the value advertised "
                           "by the chosen next hop). false = SA-QMAODV rule (own max Q)",
@@ -703,6 +708,7 @@ RoutingProtocol::Start()
   // NBQMAODV: push initial params + start adaptive controller
   m_qtable.SetMaxPaths(m_maxPaths);
   m_qtable.SetLearningParameters(m_alpha0, m_gamma, m_epsilon0);
+  m_qtable.SetEpsilonMin(m_epsilonMin); // STEP10b
   m_qtable.SetRewardWeights(m_w1, m_w2, m_w3);
   m_qtable.SetSensitivityLambda(m_lambda);
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
