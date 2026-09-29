@@ -278,6 +278,69 @@ class NeighborInfoTag : public Tag
 
 NS_OBJECT_ENSURE_REGISTERED(NeighborInfoTag);
 
+/**
+ * \brief STEP10 (NBQ-MAODV): carries the sender's value V_u(d) = max_b Q_u(d,b) for up to
+ * kMax destinations (a destination advertises V = 0 for its own address). Attached to every
+ * control packet the node sends (HELLO, RREQ, RREP, RERR). 1 + 8*n bytes.
+ */
+class QValueTag : public Tag
+{
+  public:
+    static const uint8_t kMax = 8;
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::nbqmaodv::QValueTag")
+                                .SetParent<Tag>()
+                                .SetGroupName("Nbqmaodv")
+                                .AddConstructor<QValueTag>();
+        return tid;
+    }
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return 1 + 8 * m_entries.size(); }
+    void Serialize(TagBuffer i) const override
+    {
+        i.WriteU8(static_cast<uint8_t>(m_entries.size()));
+        for (const auto& e : m_entries)
+        {
+            float f = static_cast<float>(e.second);
+            uint32_t bits;
+            std::memcpy(&bits, &f, 4);
+            i.WriteU32(e.first.Get());
+            i.WriteU32(bits);
+        }
+    }
+    void Deserialize(TagBuffer i) override
+    {
+        m_entries.clear();
+        uint8_t n = i.ReadU8();
+        for (uint8_t k = 0; k < n; ++k)
+        {
+            Ipv4Address a(i.ReadU32());
+            uint32_t bits = i.ReadU32();
+            float f;
+            std::memcpy(&f, &bits, 4);
+            m_entries.emplace_back(a, static_cast<double>(f));
+        }
+    }
+    void Print(std::ostream& os) const override
+    {
+        os << "QValueTag:";
+        for (const auto& e : m_entries) os << " " << e.first << "=" << e.second;
+    }
+    bool Add(Ipv4Address dst, double v)
+    {
+        if (m_entries.size() >= kMax) return false;
+        m_entries.emplace_back(dst, v);
+        return true;
+    }
+    const std::vector<std::pair<Ipv4Address, double>>& Entries() const { return m_entries; }
+
+  private:
+    std::vector<std::pair<Ipv4Address, double>> m_entries;
+};
+
+NS_OBJECT_ENSURE_REGISTERED(QValueTag);
+
 //-----------------------------------------------------------------------------
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
@@ -392,10 +455,36 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&RoutingProtocol::m_hopByHop),
                           MakeBooleanChecker())
+            .AddAttribute("NeighbourBootstrap",
+                          "STEP10: NBQ-MAODV learning rule (bootstrap from the value advertised "
+                          "by the chosen next hop). false = SA-QMAODV rule (own max Q)",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&RoutingProtocol::m_nbqBootstrap),
+                          MakeBooleanChecker())
+            .AddAttribute("GammaNb",
+                          "STEP10: discount gamma' applied to the neighbour value V_u(d)",
+                          DoubleValue(0.95),
+                          MakeDoubleAccessor(&RoutingProtocol::m_gammaNb),
+                          MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("VFail",
+                          "STEP10: a node without a route advertises V = -VFail",
+                          DoubleValue(5.0),
+                          MakeDoubleAccessor(&RoutingProtocol::m_vFail),
+                          MakeDoubleChecker<double>(0.0))
+            .AddAttribute("HopCostPrior",
+                          "STEP10: new entries start at Q = -HopCostPrior * HopCount",
+                          DoubleValue(0.3),
+                          MakeDoubleAccessor(&RoutingProtocol::m_hcPriorCost),
+                          MakeDoubleChecker<double>(0.0))
+            .AddAttribute("NeighbourValueTtl",
+                          "STEP10: advertised neighbour values older than this are ignored",
+                          TimeValue(Seconds(3.0)),
+                          MakeTimeAccessor(&RoutingProtocol::m_nbValueTtl),
+                          MakeTimeChecker())
             .AddAttribute("UseRerrBump",
                           "STEP4: raise epsilon on RERR / link break (paper Sec. 4.2); "
-                          "false reproduces the pre-fix behaviour",
-                          BooleanValue(true),
+                          "STEP10: default false in NBQ-MAODV",
+                          BooleanValue(false),
                           MakeBooleanAccessor(&RoutingProtocol::m_useRerrBump),
                           MakeBooleanChecker())
             .AddAttribute("PeriodicAdaptInterval", "Period for ε-decay + α recompute + reward-weight update",
@@ -617,6 +706,7 @@ RoutingProtocol::Start()
   m_qtable.SetRewardWeights(m_w1, m_w2, m_w3);
   m_qtable.SetSensitivityLambda(m_lambda);
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
+  m_qtable.SetNeighbourBootstrap(m_nbqBootstrap, m_gammaNb, m_vFail, m_hcPriorCost, m_nbValueTtl); // STEP10
   if (m_useMacFeedback)
   {
       m_qtable.SetDelayRef(m_delayRef);   // STEP6
@@ -1098,6 +1188,24 @@ RoutingProtocol::AttachNbInfo(Ptr<Packet> p)
 {
     NeighborInfoTag nbi(GetEnergyFraction()); // STEP8
     p->ReplacePacketTag(nbi);
+    if (m_nbqBootstrap)
+    {
+        // STEP10: advertise V(d) for our own addresses (0) and for every known destination
+        QValueTag qv;
+        for (uint32_t i = 1; i < m_ipv4->GetNInterfaces(); ++i)
+        {
+            for (uint32_t k = 0; k < m_ipv4->GetNAddresses(i); ++k)
+            {
+                qv.Add(m_ipv4->GetAddress(i, k).GetLocal(), 0.0);
+            }
+        }
+        for (const auto& d : m_qtable.KnownDestinations())
+        {
+            if (m_ipv4->GetInterfaceForAddress(d) >= 0) continue;
+            qv.Add(d, m_qtable.AdvertisedValue(d, &m_routingTable));
+        }
+        p->ReplacePacketTag(qv);
+    }
     return p;
 }
 
@@ -1551,6 +1659,14 @@ RoutingProtocol::RecvNbqmaodv(Ptr<Socket> socket)
         if (packet->PeekPacketTag(nbi))
         {
             m_nbEnergy[sender] = nbi.GetEnergy();
+        }
+        QValueTag qv; // STEP10: remember the sender's advertised values V_sender(d)
+        if (m_nbqBootstrap && packet->PeekPacketTag(qv))
+        {
+            for (const auto& e : qv.Entries())
+            {
+                m_qtable.SetNeighbourValue(sender, e.first, e.second);
+            }
         }
     }
     Ipv4Address receiver;
@@ -2269,6 +2385,13 @@ RoutingProtocol::RecvError(Ptr<Packet> p, Ipv4Address src)
         SendRerrMessage(packet, precursors);
     }
     m_routingTable.InvalidateRoutesWithDst(unreachable);
+    if (m_nbqBootstrap)
+    {
+        for (const auto& u : unreachable) // STEP10: src became a dead end for u.first
+        {
+            m_qtable.SetNeighbourValue(src, u.first, -m_vFail);
+        }
+    }
     // STEP4: RERR-triggered exploration (paper: eps_t = min(0.5, eps_t + 0.2))
     if (m_useRerrBump && !unreachable.empty())
     {
@@ -2442,6 +2565,10 @@ RoutingProtocol::SendRerrWhenBreaksLinkToNextHop(Ipv4Address nextHop)
         return;
     }
     toNextHop.GetPrecursors(precursors);
+    if (m_nbqBootstrap)
+    {
+        m_qtable.MarkNeighbourDeadEnd(nextHop); // STEP10
+    }
     // STEP4: local link break -> RERR-triggered exploration
     if (m_useRerrBump)
     {

@@ -120,6 +120,26 @@ class QTable
     /// STEP6: delay normalisation 1/(1 + d/dRef); dRef <= 0 keeps the legacy 1/(d+1)
     void SetDelayRef(double dRefSeconds) { m_delayRef = dRefSeconds; }
 
+    // -------- STEP10: NBQ-MAODV neighbour-value bootstrapping ------------------
+    /**
+     * \brief Switch to the NBQ learning rule.
+     * Q becomes the negative of a discounted path cost:
+     *   Q(d,u) <- (1-alpha) Q(d,u) + alpha [ -(1 - r) + gammaNb * V_u(d) ],
+     * with V_d(d) = 0, V_u(d) = -vFail when u has no route, and V_u(d) = max_b Q_u(d,b)
+     * as advertised by u. New entries start at -hcPriorCost * HopCount.
+     */
+    void SetNeighbourBootstrap(bool on, double gammaNb, double vFail, double hcPriorCost, Time nbTtl);
+    bool IsNeighbourBootstrap() const { return m_bootstrap; }
+    /// Store the value V_nb(dst) advertised by neighbour nb (time-stamped now).
+    void SetNeighbourValue(Ipv4Address nb, Ipv4Address dst, double v);
+    /// nb lost its link / route: every value it advertised becomes -vFail.
+    void MarkNeighbourDeadEnd(Ipv4Address nb);
+    /// Value this node advertises for dst: max Q over next hops that are still valid
+    /// neighbours in mainTable, or -vFail when there is none.
+    double AdvertisedValue(Ipv4Address dst, const RoutingTable* mainTable) const;
+    /// Destinations for which this node keeps Q-records.
+    std::vector<Ipv4Address> KnownDestinations() const;
+
     // Read accessors (for logging / paper traces)
     double GetAlpha()   const { return m_alpha; }
     double GetGamma()   const { return m_gamma; }
@@ -207,6 +227,20 @@ class QTable
     mutable std::deque<Time> m_seqEvents;
 
     Ptr<UniformRandomVariable> m_uniform;
+
+    // ---- STEP10: NBQ state ----
+    struct NbValue
+    {
+        double v;
+        Time t;
+    };
+    double NeighbourValue(Ipv4Address nb, Ipv4Address dst, double fallback) const;
+    bool   m_bootstrap{false};
+    double m_gammaNb{0.95};
+    double m_vFail{5.0};
+    double m_hcPriorCost{0.3};
+    Time   m_nbTtl{Seconds(3.0)};
+    std::map<Ipv4Address, std::map<Ipv4Address, NbValue>> m_nbValues; // nb -> dst -> V
 };
 
 } // namespace nbqmaodv

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 namespace ns3
@@ -239,6 +240,16 @@ QTable::ReinitQValues(Ipv4Address dst)
 {
     auto it = m_records.find(dst);
     if (it == m_records.end()) return;
+    if (m_bootstrap)
+    {
+        // STEP10: cost prior proportional to the hop count
+        for (auto& r : it->second)
+        {
+            if (r.txCount > 0) continue; // preserve learned
+            r.qValue = -m_hcPriorCost * std::max<uint32_t>(1, r.rt.GetHop());
+        }
+        return;
+    }
     double sumInv = 0.0;
     for (const auto& r : it->second)
         sumInv += 1.0 / std::max<uint32_t>(1, r.rt.GetHop());
@@ -313,6 +324,7 @@ QTable::BuildCandidates(const RoutingTableEntry& primary,
     uint32_t hcP = std::max<uint32_t>(1, primary.GetHop());
     double primQValue;
     if (primFound) primQValue = primQ;
+    else if (m_bootstrap) primQValue = -m_hcPriorCost * hcP; // STEP10: cost prior
     else
     {
         double sumInv = 1.0 / hcP;
@@ -390,8 +402,23 @@ QTable::UpdateQValue(Ipv4Address dst,
     if (target == nullptr) return;
 
     double oldQ = target->qValue;
+    if (m_bootstrap)
+    {
+        // STEP10 (NBQ-MAODV): bootstrap from the value advertised by the chosen neighbour
+        double vu;
+        if (nextHop == dst)
+            vu = 0.0;                                   // next hop is the destination
+        else if (ackSuccess < 0.5)
+            vu = oldQ;                                  // no fresh information from it
+        else
+            vu = NeighbourValue(nextHop, dst, oldQ);    // advertised V_u(d), else own estimate
+        target->qValue = (1.0 - m_alpha) * oldQ + m_alpha * (-(1.0 - reward) + m_gammaNb * vu);
+    }
+    else
+    {
     // Eq. 4: Q ← (1 − α_t)·Q + α_t·[r_t + γ · max Q]
     target->qValue = (1.0 - m_alpha) * oldQ + m_alpha * (reward + m_gamma * maxFuture);
+    }
     target->txCount += 1;
     if (ackSuccess > 0.5) target->ackCount += 1;
     target->lastUpd = Simulator::Now();
@@ -476,6 +503,82 @@ QTable::Print(std::ostream& os) const
                << " tx=" << r.txCount << " ack=" << r.ackCount << "\n";
         }
     }
+}
+
+} // namespace nbqmaodv
+} // namespace ns3
+
+namespace ns3
+{
+namespace nbqmaodv
+{
+
+// ---------------------------------------------------------------------------
+// STEP10: NBQ-MAODV neighbour-value bootstrapping
+// ---------------------------------------------------------------------------
+void
+QTable::SetNeighbourBootstrap(bool on, double gammaNb, double vFail, double hcPriorCost, Time nbTtl)
+{
+    m_bootstrap = on;
+    m_gammaNb = gammaNb;
+    m_vFail = vFail;
+    m_hcPriorCost = hcPriorCost;
+    m_nbTtl = nbTtl;
+}
+
+void
+QTable::SetNeighbourValue(Ipv4Address nb, Ipv4Address dst, double v)
+{
+    m_nbValues[nb][dst] = NbValue{v, Simulator::Now()};
+}
+
+void
+QTable::MarkNeighbourDeadEnd(Ipv4Address nb)
+{
+    for (const auto& kv : m_records)
+    {
+        m_nbValues[nb][kv.first] = NbValue{-m_vFail, Simulator::Now()};
+    }
+}
+
+double
+QTable::NeighbourValue(Ipv4Address nb, Ipv4Address dst, double fallback) const
+{
+    auto a = m_nbValues.find(nb);
+    if (a == m_nbValues.end()) return fallback;
+    auto b = a->second.find(dst);
+    if (b == a->second.end()) return fallback;
+    if (Simulator::Now() - b->second.t > m_nbTtl) return fallback; // stale
+    return b->second.v;
+}
+
+double
+QTable::AdvertisedValue(Ipv4Address dst, const RoutingTable* mainTable) const
+{
+    auto it = m_records.find(dst);
+    if (it == m_records.end()) return -m_vFail;
+    double best = -std::numeric_limits<double>::infinity();
+    for (const auto& r : it->second)
+    {
+        if (mainTable != nullptr)
+        {
+            RoutingTableEntry nbr;
+            if (!const_cast<RoutingTable*>(mainTable)->LookupRoute(r.rt.GetNextHop(), nbr) ||
+                nbr.GetFlag() != VALID)
+                continue;
+        }
+        best = std::max(best, r.qValue);
+    }
+    return std::isfinite(best) ? best : -m_vFail;
+}
+
+std::vector<Ipv4Address>
+QTable::KnownDestinations() const
+{
+    std::vector<Ipv4Address> out;
+    for (const auto& kv : m_records)
+        if (!kv.second.empty()) out.push_back(kv.first);
+    return out;
 }
 
 } // namespace nbqmaodv

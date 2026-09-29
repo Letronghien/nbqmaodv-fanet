@@ -297,7 +297,13 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   /// NBQMAODV: Self-adaptive Q-table
   QTable m_qtable;
   /// STEP4: call QTable::OnRouteError() on RERR / link break
-  bool m_useRerrBump{true};
+  bool m_useRerrBump{false}; ///< STEP10: NBQ-MAODV default off (see Step 6 diagnostics)
+  /// STEP10: NBQ-MAODV neighbour-value bootstrapping
+  bool m_nbqBootstrap{true};
+  double m_gammaNb{0.95};     ///< discount of the neighbour value
+  double m_vFail{5.0};        ///< cost advertised by a node without a route
+  double m_hcPriorCost{0.3};  ///< initial Q = -hcPriorCost * HopCount
+  Time m_nbValueTtl{Seconds(3.0)}; ///< neighbour values older than this are ignored
   /// STEP5: epsilon-greedy next-hop selection at every forwarding node
   bool m_hopByHop{true};
   /// STEP6: learn from real MAC outcome (AckedMpdu / DroppedMpdu) instead of
