@@ -159,6 +159,8 @@ def ablation():
     res = pd.concat([paired(sub, "NBQ-MAODV", v, m, ["K", "L"]) for v in
                      ("NBQ-noBoot", "NBQ-saEps", "NBQ-bump", "NBQ-srcOnly") for m in ("pdr", "delayP95Ms")],
                     ignore_index=True)
+    if res.empty:
+        say("\n[E5] not enough paired data yet"); return
     res["p_holm"] = holm(res.p.values)
     res.to_csv(os.path.join(OUT, "E5_vs_NBQ.csv"), index=False)
     pv = res[res.metric == "pdr"].copy()
@@ -183,6 +185,8 @@ def robustness():
         say("\n[R600] no data yet"); return
     b = b[(b.N == 30) & (b.L == 80)]
     ra = paired(a, "AODV", "NBQ-MAODV", "pdr", ["K"]).assign(window="[300,600] s")
+    if ra.empty:
+        say("\n[R600] not enough paired data yet"); return
     rb = paired(b, "AODV", "NBQ-MAODV", "pdr", ["K"]).assign(window="[60,300] s")
     say("\n[R600] NBQ - AODV PDR difference: early vs late measurement window (N=30, L=80)")
     say(pd.concat([rb, ra])[["window", "K", "n", "diff", "diff_ci", "p"]].round(3).to_string(index=False))
