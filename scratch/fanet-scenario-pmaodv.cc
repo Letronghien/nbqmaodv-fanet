@@ -16,6 +16,7 @@
 #include "ns3/mobility-module.h"
 #include "ns3/network-module.h"
 #include "ns3/wifi-module.h"
+#include "ns3/energy-module.h"
 
 // ===== protocol module: PMAODV =====
 #include "ns3/pmaodv-module.h"
@@ -83,6 +84,33 @@ MakeRouting(const std::string& proto, const AttrList& attrs)
     return nullptr;
 }
 
+// ---------- STEP8: energy bookkeeping (UAV counted as depleted at the BasicEnergySource
+// low-battery threshold, where the WifiRadioEnergyModel switches the PHY off)
+static std::vector<Ptr<energy::BasicEnergySource>> g_sources;
+static std::vector<bool> g_depleted;
+static uint32_t g_nDepleted = 0;
+static double g_firstDepletion = -1.0;
+static double g_lowThreshold = 0.10;
+
+static void
+PollEnergy(double period)
+{
+    for (size_t i = 0; i < g_sources.size(); ++i)
+    {
+        if (g_depleted[i])
+            continue;
+        double frac = g_sources[i]->GetRemainingEnergy() / g_sources[i]->GetInitialEnergy();
+        if (frac <= g_lowThreshold + 1e-9)
+        {
+            g_depleted[i] = true;
+            ++g_nDepleted;
+            if (g_firstDepletion < 0)
+                g_firstDepletion = Simulator::Now().GetSeconds();
+        }
+    }
+    Simulator::Schedule(Seconds(period), &PollEnergy, period);
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -90,6 +118,7 @@ main(int argc, char* argv[])
     uint32_t nUav = 20, run = 1;
     double area = 1000.0, range = 250.0, vmin = 5.0, vmax = 20.0;
     double rate = 4.0, simTime = 200.0;
+    double energyJ = 0.0; // STEP8: 0 = no energy model
     uint32_t pktSize = 512;
     std::string routingAttrs = "";
 
@@ -104,6 +133,7 @@ main(int argc, char* argv[])
     cmd.AddValue("rate", "packets/s per UAV", rate);
     cmd.AddValue("pktSize", "payload bytes", pktSize);
     cmd.AddValue("simTime", "simulation time (s)", simTime);
+    cmd.AddValue("energyJ", "initial energy per UAV in J (0 = no energy model)", energyJ);
     cmd.AddValue("routingAttrs", "routing attributes, e.g. \"MaxPaths=3;AdaptiveEpsilon=false\"", routingAttrs);
     cmd.Parse(argc, argv);
 
@@ -154,6 +184,24 @@ main(int argc, char* argv[])
     WifiMacHelper mac;
     mac.SetType("ns3::AdhocWifiMac");
     NetDeviceContainer dev = wifi.Install(phy, mac, all);
+
+    // ---------- STEP8: battery + 802.11 radio energy model on every UAV (not on the base station)
+    if (energyJ > 0.0)
+    {
+        BasicEnergySourceHelper batt;
+        batt.Set("BasicEnergySourceInitialEnergyJ", DoubleValue(energyJ));
+        batt.Set("BasicEnergyLowBatteryThreshold", DoubleValue(g_lowThreshold));
+        energy::EnergySourceContainer sources = batt.Install(uavs);
+        NetDeviceContainer uavDev;
+        for (uint32_t i = 0; i < nUav; ++i)
+            uavDev.Add(dev.Get(i));
+        WifiRadioEnergyModelHelper radio; // depletion -> WifiPhy::SetOffMode
+        radio.Install(uavDev, sources);
+        for (uint32_t i = 0; i < sources.GetN(); ++i)
+            g_sources.push_back(DynamicCast<energy::BasicEnergySource>(sources.Get(i)));
+        g_depleted.assign(g_sources.size(), false);
+        Simulator::Schedule(Seconds(1.0), &PollEnergy, 1.0);
+    }
 
     // ---------- routing + IP
     auto routing = MakeRouting(proto, ParseAttrs(routingAttrs));
@@ -213,6 +261,8 @@ main(int argc, char* argv[])
 
     std::cout << proto << "," << nUav << "," << vmax << "," << rate << "," << run << "," << tx << ","
               << rx << "," << pdr << "," << delayMs << "," << thr << "," << g_ctrlTx << "," << nrl
+              << "," << g_nDepleted << ","
+              << (g_firstDepletion < 0 ? simTime : g_firstDepletion) // STEP8: 14 fields
               << std::endl;
 
     Simulator::Destroy();

@@ -50,6 +50,7 @@
 #include "ns3/wifi-net-device.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 
 namespace ns3
@@ -233,6 +234,50 @@ class QFeedbackTag : public Tag
 
 NS_OBJECT_ENSURE_REGISTERED(QFeedbackTag);
 
+/**
+ * \brief STEP8: piggybacked on every control packet (HELLO/RREQ/RREP/RERR):
+ * residual-energy fraction of the SENDER, so that neighbours can use the relay's
+ * energy in the reward (SA-QMAODV paper, Sec. 4.4).
+ */
+class NeighborInfoTag : public Tag
+{
+  public:
+    NeighborInfoTag(double energy = 1.0)
+        : m_energy(static_cast<float>(energy))
+    {
+    }
+
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::saqmaodv::NeighborInfoTag")
+                                .SetParent<Tag>()
+                                .SetGroupName("Saqmaodv")
+                                .AddConstructor<NeighborInfoTag>();
+        return tid;
+    }
+
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return 4; }
+    void Serialize(TagBuffer i) const override
+    {
+        uint32_t bits;
+        std::memcpy(&bits, &m_energy, 4);
+        i.WriteU32(bits);
+    }
+    void Deserialize(TagBuffer i) override
+    {
+        uint32_t bits = i.ReadU32();
+        std::memcpy(&m_energy, &bits, 4);
+    }
+    void Print(std::ostream& os) const override { os << "NeighborInfoTag: E=" << m_energy; }
+    double GetEnergy() const { return m_energy; }
+
+  private:
+    float m_energy;
+};
+
+NS_OBJECT_ENSURE_REGISTERED(NeighborInfoTag);
+
 //-----------------------------------------------------------------------------
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
@@ -324,6 +369,12 @@ RoutingProtocol::GetTypeId()
                           DoubleValue(0.20),
                           MakeDoubleAccessor(&RoutingProtocol::m_lowEnergyThreshold),
                           MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("UseRelayEnergy",
+                          "STEP8: energy term of the reward = residual energy of the next hop, "
+                          "piggybacked on control packets (true) or of this node (false, pre-fix)",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&RoutingProtocol::m_useRelayEnergy),
+                          MakeBooleanChecker())
             .AddAttribute("UseMacFeedback",
                           "STEP6: reward from the real MAC outcome (AckedMpdu/DroppedMpdu) and "
                           "measured one-hop delay (true) or the neighbour-freshness proxy (false)",
@@ -348,7 +399,7 @@ RoutingProtocol::GetTypeId()
                           MakeBooleanAccessor(&RoutingProtocol::m_useRerrBump),
                           MakeBooleanChecker())
             .AddAttribute("PeriodicAdaptInterval", "Period for ε-decay + α recompute + reward-weight update",
-                          TimeValue(Seconds(10.0)),
+                          TimeValue(Seconds(5.0)),
                           MakeTimeAccessor(&RoutingProtocol::m_periodicAdaptInterval),
                           MakeTimeChecker())
             .AddAttribute("HelloInterval",
@@ -624,7 +675,7 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
                          && nbrCheck.GetLifeTime() > Seconds(0);
             double ack    = fresh ? 1.0 : 0.0;
             double delayS = fresh ? 0.005 : 1.0;
-            double eFrac  = GetEnergyFraction();
+            double eFrac  = RelayEnergy(chosenRt.GetNextHop()); // STEP8
             m_qtable.UpdateQValueOrCreate(chosenRt, ack, delayS, eFrac);
         }
         route = chosenRt.GetRoute();
@@ -871,7 +922,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
                                  && nbrCheck.GetLifeTime() > Seconds(0);
                     double ack    = fresh ? 1.0 : 0.0;
                     double delayS = fresh ? 0.005 : 1.0;
-                    m_qtable.UpdateQValueOrCreate(chosenRt, ack, delayS, GetEnergyFraction());
+                    m_qtable.UpdateQValueOrCreate(chosenRt, ack, delayS, RelayEnergy(chosenRt.GetNextHop())); // STEP8
                 }
                 route = chosenRt.GetRoute();
                 Ptr<Packet> copy = p->Copy();
@@ -1042,6 +1093,25 @@ RoutingProtocol::NotifyTxAcked(Ptr<const WifiMpdu> mpdu)
     MacFeedback(mpdu, true); // STEP6
 }
 
+Ptr<Packet>
+RoutingProtocol::AttachNbInfo(Ptr<Packet> p)
+{
+    NeighborInfoTag nbi(GetEnergyFraction()); // STEP8
+    p->ReplacePacketTag(nbi);
+    return p;
+}
+
+double
+RoutingProtocol::RelayEnergy(Ipv4Address nextHop) const
+{
+    if (!m_useRelayEnergy)
+    {
+        return GetEnergyFraction(); // pre-fix behaviour: this node's own energy
+    }
+    auto it = m_nbEnergy.find(nextHop);
+    return (it != m_nbEnergy.end()) ? it->second : 1.0; // unknown neighbour / base station
+}
+
 void
 RoutingProtocol::MacFeedback(Ptr<const WifiMpdu> mpdu, bool acked)
 {
@@ -1061,7 +1131,7 @@ RoutingProtocol::MacFeedback(Ptr<const WifiMpdu> mpdu, bool acked)
                           fb.GetNextHop(),
                           acked ? 1.0 : 0.0,
                           delay,
-                          GetEnergyFraction());
+                          RelayEnergy(fb.GetNextHop())); // STEP8
 }
 
 void
@@ -1435,7 +1505,7 @@ RoutingProtocol::SendRequest(Ipv4Address dst)
 void
 RoutingProtocol::SendTo(Ptr<Socket> socket, Ptr<Packet> packet, Ipv4Address destination)
 {
-    socket->SendTo(packet, 0, InetSocketAddress(destination, HSAQMAODV_PORT));
+    socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(destination, HSAQMAODV_PORT));
 }
 
 void
@@ -1476,6 +1546,13 @@ RoutingProtocol::RecvSaqmaodv(Ptr<Socket> socket)
     Ptr<Packet> packet = socket->RecvFrom(sourceAddress);
     InetSocketAddress inetSourceAddr = InetSocketAddress::ConvertFrom(sourceAddress);
     Ipv4Address sender = inetSourceAddr.GetIpv4();
+    {
+        NeighborInfoTag nbi; // STEP8: remember the sender's residual energy
+        if (packet->PeekPacketTag(nbi))
+        {
+            m_nbEnergy[sender] = nbi.GetEnergy();
+        }
+    }
     Ipv4Address receiver;
 
     if (m_socketAddresses.find(socket) != m_socketAddresses.end())
@@ -1835,7 +1912,7 @@ RoutingProtocol::SendReply(const RreqHeader& rreqHeader, const RoutingTableEntry
     packet->AddHeader(tHeader);
     Ptr<Socket> socket = FindSocketWithInterfaceAddress(toOrigin.GetInterface());
     NS_ASSERT(socket);
-    socket->SendTo(packet, 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
+    socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
 }
 
 void
@@ -1876,7 +1953,7 @@ RoutingProtocol::SendReplyByIntermediateNode(RoutingTableEntry& toDst,
     packet->AddHeader(tHeader);
     Ptr<Socket> socket = FindSocketWithInterfaceAddress(toOrigin.GetInterface());
     NS_ASSERT(socket);
-    socket->SendTo(packet, 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
+    socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
 
     // Generating gratuitous RREPs
     if (gratRep)
@@ -1897,7 +1974,7 @@ RoutingProtocol::SendReplyByIntermediateNode(RoutingTableEntry& toDst,
         Ptr<Socket> socket = FindSocketWithInterfaceAddress(toDst.GetInterface());
         NS_ASSERT(socket);
         NS_LOG_LOGIC("Send gratuitous RREP " << packet->GetUid());
-        socket->SendTo(packetToDst, 0, InetSocketAddress(toDst.GetNextHop(), HSAQMAODV_PORT));
+        socket->SendTo(AttachNbInfo(packetToDst), 0, InetSocketAddress(toDst.GetNextHop(), HSAQMAODV_PORT));
     }
 }
 
@@ -1917,7 +1994,7 @@ RoutingProtocol::SendReplyAck(Ipv4Address neighbor)
     m_routingTable.LookupRoute(neighbor, toNeighbor);
     Ptr<Socket> socket = FindSocketWithInterfaceAddress(toNeighbor.GetInterface());
     NS_ASSERT(socket);
-    socket->SendTo(packet, 0, InetSocketAddress(neighbor, HSAQMAODV_PORT));
+    socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(neighbor, HSAQMAODV_PORT));
 }
 
 void
@@ -2007,7 +2084,7 @@ RoutingProtocol::RecvReply(Ptr<Packet> p, Ipv4Address receiver, Ipv4Address send
         m_qtable.RecordSeqNoUpdate();
         // (2) Add new route + apply positive Q-update with the current adaptive
         //     α_t and 3-term reward including residual energy fraction.
-        double eFrac = GetEnergyFraction();
+        double eFrac = RelayEnergy(newEntry.GetNextHop()); // STEP8
         m_qtable.UpdateQValueOrCreate(newEntry, /*ack=*/1.0, /*delaySec=*/0.005, eFrac);
     }
 
@@ -2077,7 +2154,7 @@ RoutingProtocol::RecvReply(Ptr<Packet> p, Ipv4Address receiver, Ipv4Address send
     packet->AddHeader(tHeader);
     Ptr<Socket> socket = FindSocketWithInterfaceAddress(toOrigin.GetInterface());
     NS_ASSERT(socket);
-    socket->SendTo(packet, 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
+    socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
 }
 
 void
@@ -2441,7 +2518,7 @@ RoutingProtocol::SendRerrWhenNoRouteToForward(Ipv4Address dst,
         Ptr<Socket> socket = FindSocketWithInterfaceAddress(toOrigin.GetInterface());
         NS_ASSERT(socket);
         NS_LOG_LOGIC("Unicast RERR to the source of the data transmission");
-        socket->SendTo(packet, 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
+        socket->SendTo(AttachNbInfo(packet), 0, InetSocketAddress(toOrigin.GetNextHop(), HSAQMAODV_PORT));
     }
     else
     {
@@ -2461,7 +2538,7 @@ RoutingProtocol::SendRerrWhenNoRouteToForward(Ipv4Address dst,
             {
                 destination = iface.GetBroadcast();
             }
-            socket->SendTo(packet->Copy(), 0, InetSocketAddress(destination, HSAQMAODV_PORT));
+            socket->SendTo(AttachNbInfo(packet->Copy()), 0, InetSocketAddress(destination, HSAQMAODV_PORT));
         }
     }
 }

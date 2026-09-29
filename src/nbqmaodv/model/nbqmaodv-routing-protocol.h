@@ -231,6 +231,10 @@ class RoutingProtocol : public Ipv4RoutingProtocol
     void NotifyTxAcked(Ptr<const WifiMpdu> mpdu);
     /// STEP6: credit the MAC outcome of a tagged data MPDU to Q(dst, nextHop)
     void MacFeedback(Ptr<const WifiMpdu> mpdu, bool acked);
+    /// STEP8: attach this node's residual energy to an outgoing control packet
+    Ptr<Packet> AttachNbInfo(Ptr<Packet> p);
+    /// STEP8: energy value used in the reward for next hop nextHop
+    double RelayEnergy(Ipv4Address nextHop) const;
 
     // Protocol parameters.
     uint32_t m_rreqRetries; ///< Maximum number of retransmissions of RREQ with TTL = NetDiameter to
@@ -300,6 +304,9 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   /// the neighbour-freshness proxy
   bool m_useMacFeedback{true};
   double m_delayRef{0.010}; ///< STEP6: delay normalisation constant (s)
+  /// STEP8: reward energy term from the next hop (piggybacked) instead of self
+  bool m_useRelayEnergy{true};
+  std::map<Ipv4Address, double> m_nbEnergy; ///< STEP8: last energy heard per neighbour
   /// NBQMAODV: max paths
   uint32_t m_maxPaths{3};
   /// NBQMAODV: initial Q-learning params (before adaptation)
@@ -313,7 +320,7 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   double m_lambda{0.1};
   Time   m_seqNoWindow{Seconds(5.0)};
   double m_lowEnergyThreshold{0.20};
-  Time   m_periodicAdaptInterval{Seconds(10.0)};
+  Time   m_periodicAdaptInterval{Seconds(5.0)};   // STEP8: SA paper Fig. 2
   EventId m_periodicAdaptEvent;
     /// A "drop-front" queue used by the routing layer to buffer packets to which it does not have a
     /// route.
