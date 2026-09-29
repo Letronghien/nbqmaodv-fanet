@@ -117,6 +117,8 @@ class QTable
     void SetSensitivityLambda(double lambda);
     /// Configurable: SeqNo window size (default 5 s).
     void SetSeqNoWindow(Time window);
+    /// STEP6: delay normalisation 1/(1 + d/dRef); dRef <= 0 keeps the legacy 1/(d+1)
+    void SetDelayRef(double dRefSeconds) { m_delayRef = dRefSeconds; }
 
     // Read accessors (for logging / paper traces)
     double GetAlpha()   const { return m_alpha; }
@@ -194,6 +196,7 @@ class QTable
     double m_epsilonBump;      // 0.20  (on-RERR)
     double m_lambda;           // 0.1   (sensitivity in α_t formula)
     Time   m_seqNoWindow;      // 5 s
+    double m_delayRef{0.0};    // STEP6: 0 = legacy 1/(delay+1)
     double m_lowEnergyThresh;  // 0.20
     // normal-mode reward weights
     double m_w1Normal, m_w2Normal, m_w3Normal;

@@ -227,6 +227,10 @@ class RoutingProtocol : public Ipv4RoutingProtocol
      * \param mpdu the dropped MPDU
      */
     void NotifyTxError(WifiMacDropReason reason, Ptr<const WifiMpdu> mpdu);
+    /// STEP6: MPDU acknowledged by the next hop
+    void NotifyTxAcked(Ptr<const WifiMpdu> mpdu);
+    /// STEP6: credit the MAC outcome of a tagged data MPDU to Q(dst, nextHop)
+    void MacFeedback(Ptr<const WifiMpdu> mpdu, bool acked);
 
     // Protocol parameters.
     uint32_t m_rreqRetries; ///< Maximum number of retransmissions of RREQ with TTL = NetDiameter to
@@ -292,6 +296,10 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   bool m_useRerrBump{true};
   /// STEP5: epsilon-greedy next-hop selection at every forwarding node
   bool m_hopByHop{true};
+  /// STEP6: learn from real MAC outcome (AckedMpdu / DroppedMpdu) instead of
+  /// the neighbour-freshness proxy
+  bool m_useMacFeedback{true};
+  double m_delayRef{0.010}; ///< STEP6: delay normalisation constant (s)
   /// SAQMAODV: max paths
   uint32_t m_maxPaths{3};
   /// SAQMAODV: initial Q-learning params (before adaptation)

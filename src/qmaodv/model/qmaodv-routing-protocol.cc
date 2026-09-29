@@ -179,6 +179,60 @@ class PrevHopTag : public Tag
 
 NS_OBJECT_ENSURE_REGISTERED(PrevHopTag);
 
+/**
+ * \brief STEP6: attached to a data packet when this node chooses its next hop.
+ * Records (destination, chosen next hop, decision time) so that the MAC-layer
+ * outcome (AckedMpdu / DroppedMpdu) can be credited to the right Q(s,a).
+ */
+class QFeedbackTag : public Tag
+{
+  public:
+    QFeedbackTag(Ipv4Address dst = Ipv4Address(), Ipv4Address nh = Ipv4Address(), Time t = Seconds(0))
+        : m_dst(dst),
+          m_nh(nh),
+          m_t(t)
+    {
+    }
+
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::qmaodv::QFeedbackTag")
+                                .SetParent<Tag>()
+                                .SetGroupName("Qmaodv")
+                                .AddConstructor<QFeedbackTag>();
+        return tid;
+    }
+
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return 16; }
+    void Serialize(TagBuffer i) const override
+    {
+        i.WriteU32(m_dst.Get());
+        i.WriteU32(m_nh.Get());
+        i.WriteU64(static_cast<uint64_t>(m_t.GetTimeStep()));
+    }
+    void Deserialize(TagBuffer i) override
+    {
+        m_dst = Ipv4Address(i.ReadU32());
+        m_nh = Ipv4Address(i.ReadU32());
+        m_t = TimeStep(static_cast<int64_t>(i.ReadU64()));
+    }
+    void Print(std::ostream& os) const override
+    {
+        os << "QFeedbackTag: dst=" << m_dst << " nh=" << m_nh << " t=" << m_t;
+    }
+    Ipv4Address GetDst() const { return m_dst; }
+    Ipv4Address GetNextHop() const { return m_nh; }
+    Time GetTime() const { return m_t; }
+
+  private:
+    Ipv4Address m_dst;
+    Ipv4Address m_nh;
+    Time m_t;
+};
+
+NS_OBJECT_ENSURE_REGISTERED(QFeedbackTag);
+
 //-----------------------------------------------------------------------------
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
@@ -296,6 +350,17 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(false),
                           MakeBooleanAccessor(&RoutingProtocol::m_adaptReward),
                           MakeBooleanChecker())
+            .AddAttribute("UseMacFeedback",
+                          "STEP6: reward from the real MAC outcome (AckedMpdu/DroppedMpdu) and "
+                          "measured one-hop delay (true) or the neighbour-freshness proxy (false)",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&RoutingProtocol::m_useMacFeedback),
+                          MakeBooleanChecker())
+            .AddAttribute("DelayRef",
+                          "STEP6: delay normalisation constant d_ref in 1/(1 + delay/d_ref) (s)",
+                          DoubleValue(0.010),
+                          MakeDoubleAccessor(&RoutingProtocol::m_delayRef),
+                          MakeDoubleChecker<double>(0.0))
             .AddAttribute("HopByHop",
                           "STEP5: epsilon-greedy next-hop selection at every forwarding node "
                           "(true) or only at the source (false, pre-fix behaviour)",
@@ -538,6 +603,10 @@ RoutingProtocol::Start()
   m_qtable.SetTdErrorParams(m_muTdError, m_kappaTdError);
   m_qtable.SetAdaptiveFlags(m_adaptEpsilon, m_adaptAlpha, m_adaptReward);   // STEP3
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
+  if (m_useMacFeedback)
+  {
+      m_qtable.SetDelayRef(m_delayRef);   // STEP6
+  }
   m_qtable.SetLowEnergyThreshold(m_lowEnergyThreshold);
   m_periodicAdaptEvent =
       Simulator::Schedule(m_periodicAdaptInterval,
@@ -584,6 +653,7 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         RoutingTableEntry chosenRt = rt;
         m_qtable.SelectEpsilonGreedy(rt, chosenRt, &m_routingTable);
         // SAQMAODV-FIX-V2: per-packet SA-Q-update with neighbour-freshness reward.
+        if (!m_useMacFeedback)   // STEP6: legacy proxy update
         {
             RoutingTableEntry nbrCheck;
             bool fresh = m_routingTable.LookupRoute(chosenRt.GetNextHop(), nbrCheck)
@@ -600,6 +670,11 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         {
             PrevHopTag self(chosenRt.GetInterface().GetLocal()); // STEP5
             p->ReplacePacketTag(self);
+        }
+        if (m_useMacFeedback && p)
+        {
+            QFeedbackTag fb(dst, chosenRt.GetNextHop(), Simulator::Now()); // STEP6
+            p->ReplacePacketTag(fb);
         }
         NS_LOG_DEBUG("Exist route to " << route->GetDestination() << " from interface "
                                        << route->GetSource());
@@ -825,6 +900,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
                 Ipv4Address prevHop = p->PeekPacketTag(prev) ? prev.Get() : Ipv4Address();
                 RoutingTableEntry chosenRt = toDst;
                 m_qtable.SelectEpsilonGreedy(toDst, chosenRt, &m_routingTable, prevHop);
+                if (!m_useMacFeedback)   // STEP6: legacy proxy update
                 {
                     RoutingTableEntry nbrCheck;
                     bool fresh = m_routingTable.LookupRoute(chosenRt.GetNextHop(), nbrCheck)
@@ -839,6 +915,14 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
                 PrevHopTag self(chosenRt.GetInterface().GetLocal());
                 copy->ReplacePacketTag(self);
                 out = copy;
+            }
+            if (m_useMacFeedback)
+            {
+                // STEP6: every forwarding node learns from the outcome of its own hop
+                Ptr<Packet> tagged = out->Copy();
+                QFeedbackTag fb(dst, route->GetGateway(), Simulator::Now());
+                tagged->ReplacePacketTag(fb);
+                out = tagged;
             }
             NS_LOG_LOGIC(route->GetSource() << " forwarding to " << dst << " from " << origin
                                             << " packet " << p->GetUid());
@@ -978,12 +1062,43 @@ RoutingProtocol::NotifyInterfaceUp(uint32_t i)
 
     mac->TraceConnectWithoutContext("DroppedMpdu",
                                     MakeCallback(&RoutingProtocol::NotifyTxError, this));
+    mac->TraceConnectWithoutContext("AckedMpdu",
+                                    MakeCallback(&RoutingProtocol::NotifyTxAcked, this)); // STEP6
 }
 
 void
 RoutingProtocol::NotifyTxError(WifiMacDropReason reason, Ptr<const WifiMpdu> mpdu)
 {
+    MacFeedback(mpdu, false); // STEP6: credit the failure before the link-break handling
     m_nb.GetTxErrorCallback()(mpdu->GetHeader());
+}
+
+void
+RoutingProtocol::NotifyTxAcked(Ptr<const WifiMpdu> mpdu)
+{
+    MacFeedback(mpdu, true); // STEP6
+}
+
+void
+RoutingProtocol::MacFeedback(Ptr<const WifiMpdu> mpdu, bool acked)
+{
+    // STEP6: reward r = w1*ACK + w2/(1 + delay/d_ref) + w3*E, with ACK and delay
+    // measured at the MAC layer for the hop chosen by THIS node.
+    if (!m_useMacFeedback || !mpdu || !mpdu->GetHeader().IsData())
+    {
+        return;
+    }
+    QFeedbackTag fb;
+    if (!mpdu->GetPacket()->PeekPacketTag(fb))
+    {
+        return; // control packet or packet not routed by the Q-policy
+    }
+    double delay = (Simulator::Now() - fb.GetTime()).GetSeconds();
+    m_qtable.UpdateQValue(fb.GetDst(),
+                          fb.GetNextHop(),
+                          acked ? 1.0 : 0.0,
+                          delay,
+                          GetEnergyFraction());
 }
 
 void
@@ -1002,6 +1117,8 @@ RoutingProtocol::NotifyInterfaceDown(uint32_t i)
         {
             mac->TraceDisconnectWithoutContext("DroppedMpdu",
                                                MakeCallback(&RoutingProtocol::NotifyTxError, this));
+            mac->TraceDisconnectWithoutContext("AckedMpdu",
+                                               MakeCallback(&RoutingProtocol::NotifyTxAcked, this));
             m_nb.DelArpCache(l3->GetInterface(i)->GetArpCache());
         }
     }

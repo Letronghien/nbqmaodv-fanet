@@ -173,7 +173,8 @@ QTable::ComputeReward(double ackSuccess, double delaySec, double energyFrac) con
 {
     if (delaySec < 0.0) delaySec = 0.0;
     double r = m_w1 * ackSuccess
-             + m_w2 * (1.0 / (delaySec + 1.0))
+             + m_w2 * ((m_delayRef > 0.0) ? 1.0 / (1.0 + delaySec / m_delayRef)   // STEP6
+                                          : 1.0 / (delaySec + 1.0))
              + m_w3 * energyFrac;
     return r;
 }
