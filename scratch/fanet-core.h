@@ -219,6 +219,8 @@ static NodeContainer g_uavNodes;
 static NetDeviceContainer g_allUavDev;
 static double g_nominalRange = 250.0;
 static double g_sumNeighbours = 0.0, g_sumQueue = 0.0;
+static double g_sumDistBs = 0.0; // STEP11b: 3-D distance UAV -> base station
+static Vector g_bsXyz;
 static uint64_t g_nNbSamples = 0, g_nQSamples = 0;
 
 static bool
@@ -246,6 +248,7 @@ SampleLocalState(double period)
                 ++deg;
         }
         g_sumNeighbours += deg;
+        g_sumDistBs += CalculateDistance(pi, g_bsXyz); // STEP11b
         ++g_nNbSamples;
         Ptr<WifiNetDevice> wd = DynamicCast<WifiNetDevice>(g_allUavDev.Get(i));
         if (wd && wd->GetMac() && wd->GetMac()->GetTxop())
@@ -306,8 +309,24 @@ WindowReport(double period)
         tx += kv.second.txPackets;
         rx += kv.second.rxPackets;
     }
+    // STEP11b: instantaneous spatial state, to tell mobility transients from protocol warm-up
+    double sumD = 0.0, sumNb = 0.0;
+    uint32_t n = g_uavNodes.GetN(), alive = 0;
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        if (!UavAlive(i))
+            continue;
+        ++alive;
+        Vector pi = g_uavNodes.Get(i)->GetObject<MobilityModel>()->GetPosition();
+        sumD += CalculateDistance(pi, g_bsXyz);
+        for (uint32_t j = 0; j < n; ++j)
+            if (j != i && UavAlive(j) &&
+                CalculateDistance(pi, g_uavNodes.Get(j)->GetObject<MobilityModel>()->GetPosition()) <= g_nominalRange)
+                sumNb += 1.0;
+    }
     std::cout << "# WIN t=" << Simulator::Now().GetSeconds() << " tx=" << tx << " rx=" << rx
-              << " ctrl=" << g_ctrlTx << std::endl;
+              << " ctrl=" << g_ctrlTx << " distBs=" << (alive ? sumD / alive : 0.0)
+              << " nb=" << (alive ? sumNb / alive : 0.0) << std::endl;
     Simulator::Schedule(Seconds(period), &WindowReport, period);
 }
 
@@ -350,6 +369,7 @@ FanetMain(int argc, char* argv[], const std::string& defaultProto, const Routing
     double energyRandMin = 1.0;    // initial energy = energyJ * U[energyRandMin, 1]
     double warmup = 0.0;           // traffic metrics cover [warmup, simTime]
     double windowReport = 0.0;     // print cumulative counters every W s (0 = off)
+    double totalLoad = 0.0;        // STEP11b: total packets/s of all UAVs (> 0 overrides rate)
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("protocol", "AODV|PMAODV|QMAODV|SA-QMAODV|NBQ-MAODV (depends on the module)", proto);
@@ -379,10 +399,13 @@ FanetMain(int argc, char* argv[], const std::string& defaultProto, const Routing
     cmd.AddValue("energyRandMin", "STEP11: initial energy = energyJ * U[energyRandMin, 1]", energyRandMin);
     cmd.AddValue("warmup", "STEP11: traffic metrics cover [warmup, simTime] (s)", warmup);
     cmd.AddValue("windowReport", "STEP11: print cumulative tx/rx every W s (0 = off)", windowReport);
+    cmd.AddValue("totalLoad", "STEP11b: total offered load in packets/s (> 0: rate = totalLoad / nUav)", totalLoad);
     cmd.Parse(argc, argv);
     NS_ABORT_MSG_IF(mobility != "rwp" && mobility != "gm", "mobility must be rwp or gm");
     NS_ABORT_MSG_IF(bsPos != "center" && bsPos != "edge", "bsPos must be center or edge");
     NS_ABORT_MSG_IF(warmup < 0 || warmup >= simTime, "warmup must be in [0, simTime)");
+    if (totalLoad > 0.0)
+        rate = totalLoad / nUav; // STEP11b: density experiments at constant total load
 
     RngSeedManager::SetSeed(12345);
     RngSeedManager::SetRun(run);
@@ -445,6 +468,7 @@ FanetMain(int argc, char* argv[], const std::string& defaultProto, const Routing
     fixed.Install(bs);
     Vector bsXyz = (bsPos == "center") ? Vector(area / 2, area / 2, 0) : Vector(area / 2, 0, 0);
     bs.Get(0)->GetObject<MobilityModel>()->SetPosition(bsXyz);
+    g_bsXyz = bsXyz;
 
     // ---------- 802.11b ad hoc, 2 Mbit/s
     WifiHelper wifi;
@@ -609,7 +633,10 @@ FanetMain(int argc, char* argv[], const std::string& defaultProto, const Routing
               << " macDropped=" << dropped
               << " macAckRatio=" << (acked + dropped ? double(acked) / (acked + dropped) : 0.0)
               << " avgNeighbours=" << (g_nNbSamples ? g_sumNeighbours / g_nNbSamples : 0.0)
-              << " avgMacQueue=" << (g_nQSamples ? g_sumQueue / g_nQSamples : 0.0) << std::endl;
+              << " avgMacQueue=" << (g_nQSamples ? g_sumQueue / g_nQSamples : 0.0)
+              << " avgDistBs=" << (g_nNbSamples ? g_sumDistBs / g_nNbSamples : 0.0) // STEP11b
+              << " rate=" << rate << " nakagamiM=" << chCfg.nakagamiM << " txPowerDbm=" << chCfg.txPowerDbm
+              << std::endl;
 
     std::cout << proto << "," << nUav << "," << vmax << "," << rate << "," << run << "," << tx << ","
               << rx << "," << pdr << "," << delayMs << "," << thr << "," << ctrl << "," << nrl

@@ -70,6 +70,8 @@ RunOne(const FanetChannelConfig& cfg, double d, double duration, uint32_t run, d
     stack.Install(n);
     Ipv4AddressHelper addr("10.9.0.0", "255.255.255.0");
     Ipv4InterfaceContainer ifs = addr.Assign(dev);
+    NeighborCacheHelper nch; // STEP11b: static ARP entries -> no ARP-failure artefacts
+    nch.PopulateNeighborCache();
 
     UdpServerHelper srv(9);
     ApplicationContainer sa = srv.Install(n.Get(1));
@@ -100,7 +102,7 @@ main(int argc, char* argv[])
 {
     FanetChannelConfig cfg;
     cfg.channel = "fading";
-    double duration = 20.0, dMin = 50, dMax = 450, dStep = 25;
+    double duration = 20.0, dMin = 25, dMax = 500, dStep = 25; // STEP11b: up to the 2*range cut
     uint32_t run = 1;
     CommandLine cmd(__FILE__);
     AddFanetChannelArgs(cmd, cfg);
@@ -112,7 +114,7 @@ main(int argc, char* argv[])
     cmd.AddValue("run", "RNG run", run);
     cmd.Parse(argc, argv);
 
-    std::cout << "# channel=" << cfg.channel << " txPowerDbm=" << cfg.txPowerDbm << " plExp=" << cfg.plExp
+    std::cout << "# channel=" << cfg.channel << " nakagamiM=" << cfg.nakagamiM << " txPowerDbm=" << cfg.txPowerDbm << " plExp=" << cfg.plExp
               << " ccaDbm=" << cfg.ccaDbm << " range=" << cfg.range << std::endl;
     std::cout << "d_m,frameSuccess,appDelivery" << std::endl;
     for (double d = dMin; d <= dMax + 1e-9; d += dStep)

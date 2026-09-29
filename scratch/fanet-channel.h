@@ -29,6 +29,7 @@ struct FanetChannelConfig
     double plExp = 2.0;            ///< fading only: path-loss exponent (2 = free space, LOS)
     double ccaDbm = -92.0;         ///< fading only: CCA sensitivity
     double preambleMinRssiDbm = -95.0; ///< fading only
+    double nakagamiM = 0.0; ///< STEP11b: 0 = distance profile m = 3/2/1.5 (K2); > 0 = constant m (K1: 10)
 };
 
 inline void
@@ -38,6 +39,9 @@ AddFanetChannelArgs(CommandLine& cmd, FanetChannelConfig& c)
     cmd.AddValue("txPowerDbm", "STEP10c: transmit power for channel=fading (dBm)", c.txPowerDbm);
     cmd.AddValue("plExp", "STEP10c: path-loss exponent for channel=fading", c.plExp);
     cmd.AddValue("ccaDbm", "STEP10c: CCA sensitivity for channel=fading (dBm)", c.ccaDbm);
+    cmd.AddValue("nakagamiM",
+                 "STEP11b: Nakagami m for channel=fading; 0 = distance profile 3/2/1.5, >0 = constant m",
+                 c.nakagamiM);
 }
 
 inline void
@@ -54,12 +58,15 @@ ConfigureFanetChannel(YansWifiChannelHelper& ch, YansWifiPhyHelper& phy, const F
                               "Exponent", DoubleValue(c.plExp),
                               "ReferenceDistance", DoubleValue(1.0),
                               "ReferenceLoss", DoubleValue(40.09)); // Friis at 1 m, 2.412 GHz
+        double m0 = 3.0, m1 = 2.0, m2 = 1.5; // K2: distance profile
+        if (c.nakagamiM > 0.0)
+            m0 = m1 = m2 = c.nakagamiM;      // K1: constant (strong line of sight)
         ch.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                               "Distance1", DoubleValue(80.0),
                               "Distance2", DoubleValue(200.0),
-                              "m0", DoubleValue(3.0),
-                              "m1", DoubleValue(2.0),
-                              "m2", DoubleValue(1.5));
+                              "m0", DoubleValue(m0),
+                              "m1", DoubleValue(m1),
+                              "m2", DoubleValue(m2));
         ch.AddPropagationLoss("ns3::RangePropagationLossModel", "MaxRange", DoubleValue(2.0 * c.range));
         phy.Set("TxPowerStart", DoubleValue(c.txPowerDbm));
         phy.Set("TxPowerEnd", DoubleValue(c.txPowerDbm));
