@@ -404,8 +404,8 @@ RoutingProtocol::GetTypeId()
                           DoubleValue(0.9),
                           MakeDoubleAccessor(&RoutingProtocol::m_gamma),
                           MakeDoubleChecker<double>(0.0, 1.0))
-            .AddAttribute("Epsilon0", "Initial ε (will be adapted)",
-                          DoubleValue(0.3),
+            .AddAttribute("Epsilon0", "Initial ε (STEP10c: NBQ-MAODV default 0.1, SA-QMAODV 0.3)",
+                          DoubleValue(0.1),
                           MakeDoubleAccessor(&RoutingProtocol::m_epsilon0),
                           MakeDoubleChecker<double>(0.0, 1.0))
             .AddAttribute("RewardW1", "Reward weight for ACK_success",
@@ -456,8 +456,9 @@ RoutingProtocol::GetTypeId()
                           MakeBooleanAccessor(&RoutingProtocol::m_hopByHop),
                           MakeBooleanChecker())
             .AddAttribute("EpsilonMin",
-                          "STEP10b: floor of the periodic epsilon decay (SA-QMAODV: 0.1)",
-                          DoubleValue(0.10),
+                          "STEP10b: floor of the periodic epsilon decay (SA-QMAODV: 0.1; "
+                          "STEP10c: NBQ-MAODV default 0.02, chosen on tuning seeds 101-103)",
+                          DoubleValue(0.02),
                           MakeDoubleAccessor(&RoutingProtocol::m_epsilonMin),
                           MakeDoubleChecker<double>(0.0, 1.0))
             .AddAttribute("NeighbourBootstrap",

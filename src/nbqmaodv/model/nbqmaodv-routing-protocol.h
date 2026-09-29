@@ -300,7 +300,7 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   bool m_useRerrBump{false}; ///< STEP10: NBQ-MAODV default off (see Step 6 diagnostics)
   /// STEP10: NBQ-MAODV neighbour-value bootstrapping
   bool m_nbqBootstrap{true};
-  double m_epsilonMin{0.10}; ///< STEP10b: floor of the periodic epsilon decay
+  double m_epsilonMin{0.02}; ///< STEP10b/10c: floor of the periodic epsilon decay
   double m_gammaNb{0.95};     ///< discount of the neighbour value
   double m_vFail{5.0};        ///< cost advertised by a node without a route
   double m_hcPriorCost{0.3};  ///< initial Q = -hcPriorCost * HopCount
@@ -319,7 +319,7 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   /// NBQMAODV: initial Q-learning params (before adaptation)
   double m_alpha0{0.5};
   double m_gamma{0.9};
-  double m_epsilon0{0.3};
+  double m_epsilon0{0.1}; // STEP10c
   double m_w1{0.5};
   double m_w2{0.4};
   double m_w3{0.1};

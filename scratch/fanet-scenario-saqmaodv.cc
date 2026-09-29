@@ -21,6 +21,8 @@
 // ===== protocol module: SA-QMAODV =====
 #include "ns3/saqmaodv-module.h"
 
+#include "fanet-channel.h" // STEP10c
+
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -203,6 +205,8 @@ main(int argc, char* argv[])
     cmd.AddValue("run", "RNG run number (seed)", run);
     cmd.AddValue("area", "side of the square area (m)", area);
     cmd.AddValue("range", "radio range (m)", range);
+    FanetChannelConfig chCfg; // STEP10c
+    AddFanetChannelArgs(cmd, chCfg);
     cmd.AddValue("vmin", "min speed (m/s)", vmin);
     cmd.AddValue("vmax", "max speed (m/s)", vmax);
     cmd.AddValue("rate", "packets/s per UAV", rate);
@@ -257,9 +261,9 @@ main(int argc, char* argv[])
                                  "DataMode", StringValue("DsssRate2Mbps"),
                                  "ControlMode", StringValue("DsssRate1Mbps"));
     YansWifiChannelHelper ch;
-    ch.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-    ch.AddPropagationLoss("ns3::RangePropagationLossModel", "MaxRange", DoubleValue(range));
     YansWifiPhyHelper phy;
+    chCfg.range = range;
+    ConfigureFanetChannel(ch, phy, chCfg); // STEP10c: --channel=range (default) | fading
     phy.SetChannel(ch.Create());
     WifiMacHelper mac;
     mac.SetType("ns3::AdhocWifiMac");
