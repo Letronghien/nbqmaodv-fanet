@@ -142,6 +142,13 @@ class QTable
     /// Destinations for which this node keeps Q-records.
     std::vector<Ipv4Address> KnownDestinations() const;
 
+    // -------- STEP13b: Q-Learning AODV of Liu et al. (Electronics 2026) as external baseline
+    void SetLiuMode(bool on) { m_liu = on; }
+    /// Q(dst,nh) <- (1-alpha) Q + alpha * target; false if no such record
+    bool UpdateTowards(Ipv4Address dst, Ipv4Address nh, double target, double alpha);
+    /// hop count of the record (dst, nh), 0 if none
+    uint32_t RecordHop(Ipv4Address dst, Ipv4Address nh) const;
+
     // Read accessors (for logging / paper traces)
     double GetAlpha()   const { return m_alpha; }
     double GetGamma()   const { return m_gamma; }
@@ -238,6 +245,7 @@ class QTable
     };
     double NeighbourValue(Ipv4Address nb, Ipv4Address dst, double fallback) const;
     bool   m_bootstrap{false};
+    bool   m_liu{false}; ///< STEP13b
     double m_gammaNb{0.95};
     double m_vFail{5.0};
     double m_hcPriorCost{0.3};

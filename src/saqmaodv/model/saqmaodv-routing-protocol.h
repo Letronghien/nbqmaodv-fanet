@@ -300,6 +300,7 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   bool m_useRerrBump{true};
   /// STEP5: epsilon-greedy next-hop selection at every forwarding node
   bool m_hopByHop{true};
+  bool m_tagsOnAir{false}; ///< STEP13b
   /// STEP6: learn from real MAC outcome (AckedMpdu / DroppedMpdu) instead of
   /// the neighbour-freshness proxy
   bool m_useMacFeedback{true};

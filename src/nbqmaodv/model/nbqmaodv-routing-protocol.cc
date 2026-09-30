@@ -39,6 +39,7 @@
 #include "ns3/basic-energy-source.h"
 #include "ns3/inet-socket-address.h"
 #include "ns3/log.h"
+#include "ns3/mobility-model.h"
 #include "ns3/pointer.h"
 #include "ns3/random-variable-stream.h"
 #include "ns3/string.h"
@@ -341,6 +342,52 @@ class QValueTag : public Tag
 
 NS_OBJECT_ENSURE_REGISTERED(QValueTag);
 
+/**
+ * \brief STEP13b (Liu et al. baseline): sender position, velocity and free share of its
+ * route-discovery buffer, carried on control packets (28 bytes).
+ */
+class LiuStateTag : public Tag
+{
+  public:
+    Vector pos, vel;
+    double qFree{1.0};
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::nbqmaodv::LiuStateTag")
+                                .SetParent<Tag>()
+                                .SetGroupName("Nbqmaodv")
+                                .AddConstructor<LiuStateTag>();
+        return tid;
+    }
+    TypeId GetInstanceTypeId() const override { return GetTypeId(); }
+    uint32_t GetSerializedSize() const override { return 28; }
+    static void W(TagBuffer& i, double v)
+    {
+        float f = static_cast<float>(v);
+        uint32_t b;
+        std::memcpy(&b, &f, 4);
+        i.WriteU32(b);
+    }
+    static double R(TagBuffer& i)
+    {
+        uint32_t b = i.ReadU32();
+        float f;
+        std::memcpy(&f, &b, 4);
+        return f;
+    }
+    void Serialize(TagBuffer i) const override
+    {
+        W(i, pos.x); W(i, pos.y); W(i, pos.z); W(i, vel.x); W(i, vel.y); W(i, vel.z); W(i, qFree);
+    }
+    void Deserialize(TagBuffer i) override
+    {
+        pos.x = R(i); pos.y = R(i); pos.z = R(i); vel.x = R(i); vel.y = R(i); vel.z = R(i); qFree = R(i);
+    }
+    void Print(std::ostream& os) const override { os << "LiuStateTag pos=" << pos << " vel=" << vel << " qFree=" << qFree; }
+};
+
+NS_OBJECT_ENSURE_REGISTERED(LiuStateTag);
+
 //-----------------------------------------------------------------------------
 RoutingProtocol::RoutingProtocol()
     : m_rreqRetries(2),
@@ -487,6 +534,26 @@ RoutingProtocol::GetTypeId()
                           TimeValue(Seconds(3.0)),
                           MakeTimeAccessor(&RoutingProtocol::m_nbValueTtl),
                           MakeTimeChecker())
+            .AddAttribute("LiuQAodv",
+                          "STEP13b: run as the Q-Learning AODV of Liu et al. (2026): source-only greedy "
+                          "selection, state-based reward, update on received control messages",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_liuQAodv),
+                          MakeBooleanChecker())
+            .AddAttribute("LiuGamma", "STEP13b: discount of the Liu baseline (paper: 1)",
+                          DoubleValue(1.0),
+                          MakeDoubleAccessor(&RoutingProtocol::m_liuGamma),
+                          MakeDoubleChecker<double>(0.0, 1.0))
+            .AddAttribute("LiuRange", "STEP13b: communication range R of the Liu link-stability term (m)",
+                          DoubleValue(250.0),
+                          MakeDoubleAccessor(&RoutingProtocol::m_liuRange),
+                          MakeDoubleChecker<double>(1.0))
+            .AddAttribute("TagsOnAir",
+                          "STEP13b: pad packets with the bytes that the packet tags would occupy on air "
+                          "(previous hop on data, energy/values on control). false = ns-3 tags only",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_tagsOnAir),
+                          MakeBooleanChecker())
             .AddAttribute("UseRerrBump",
                           "STEP4: raise epsilon on RERR / link break (paper Sec. 4.2); "
                           "STEP10: default false in NBQ-MAODV",
@@ -708,12 +775,24 @@ RoutingProtocol::Start()
 {
   // NBQMAODV: push initial params + start adaptive controller
   m_qtable.SetMaxPaths(m_maxPaths);
+  if (m_liuQAodv)
+  {
+      // STEP13b: Liu et al. forward on the highest-valued path chosen at the source, no exploration,
+      // no MAC feedback, no RERR-triggered exploration
+      m_hopByHop = false;
+      m_useMacFeedback = false;
+      m_useRerrBump = false;
+      m_epsilon0 = 0.0;
+      m_epsilonMin = 0.0;
+      m_nbqBootstrap = true; // the value advertisement is reused to carry max_n Q_z(y,n)
+  }
   m_qtable.SetLearningParameters(m_alpha0, m_gamma, m_epsilon0);
   m_qtable.SetEpsilonMin(m_epsilonMin); // STEP10b
   m_qtable.SetRewardWeights(m_w1, m_w2, m_w3);
   m_qtable.SetSensitivityLambda(m_lambda);
   m_qtable.SetSeqNoWindow(m_seqNoWindow);
   m_qtable.SetNeighbourBootstrap(m_nbqBootstrap, m_gammaNb, m_vFail, m_hcPriorCost, m_nbValueTtl); // STEP10
+  m_qtable.SetLiuMode(m_liuQAodv); // STEP13b
   if (m_useMacFeedback)
   {
       m_qtable.SetDelayRef(m_delayRef);   // STEP6
@@ -764,7 +843,7 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         RoutingTableEntry chosenRt = rt;
         m_qtable.SelectEpsilonGreedy(rt, chosenRt, &m_routingTable);
         // NBQMAODV-FIX-V2: per-packet SA-Q-update with neighbour-freshness reward.
-        if (!m_useMacFeedback)   // STEP6: legacy proxy update
+        if (!m_useMacFeedback && !m_liuQAodv)   // STEP6 / STEP13b
         {
             RoutingTableEntry nbrCheck;
             bool fresh = m_routingTable.LookupRoute(chosenRt.GetNextHop(), nbrCheck)
@@ -781,6 +860,13 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         {
             PrevHopTag self(chosenRt.GetInterface().GetLocal()); // STEP5
             p->ReplacePacketTag(self);
+            if (m_tagsOnAir && p) // STEP13b: carry the previous-hop address on air (4 B)
+            {
+                UdpHeader uh;
+                bool ctrl = p->PeekHeader(uh) && (uh.GetDestinationPort() == 654 || uh.GetSourcePort() == 654);
+                if (!ctrl)
+                    p->AddPaddingAtEnd(4);
+            }
         }
         if (m_useMacFeedback && p)
         {
@@ -1011,7 +1097,7 @@ RoutingProtocol::Forwarding(Ptr<const Packet> p,
                 Ipv4Address prevHop = p->PeekPacketTag(prev) ? prev.Get() : Ipv4Address();
                 RoutingTableEntry chosenRt = toDst;
                 m_qtable.SelectEpsilonGreedy(toDst, chosenRt, &m_routingTable, prevHop);
-                if (!m_useMacFeedback)   // STEP6: legacy proxy update
+                if (!m_useMacFeedback && !m_liuQAodv)   // STEP6 / STEP13b
                 {
                     RoutingTableEntry nbrCheck;
                     bool fresh = m_routingTable.LookupRoute(chosenRt.GetNextHop(), nbrCheck)
@@ -1193,8 +1279,10 @@ RoutingProtocol::NotifyTxAcked(Ptr<const WifiMpdu> mpdu)
 Ptr<Packet>
 RoutingProtocol::AttachNbInfo(Ptr<Packet> p)
 {
+    uint32_t onAir = 0; // STEP13b: bytes these tags would occupy if they were real header fields
     NeighborInfoTag nbi(GetEnergyFraction()); // STEP8
     p->ReplacePacketTag(nbi);
+    onAir += nbi.GetSerializedSize();
     if (m_nbqBootstrap)
     {
         // STEP10: advertise V(d) for our own addresses (0) and for every known destination
@@ -1209,11 +1297,47 @@ RoutingProtocol::AttachNbInfo(Ptr<Packet> p)
         for (const auto& d : m_qtable.KnownDestinations())
         {
             if (m_ipv4->GetInterfaceForAddress(d) >= 0) continue;
-            qv.Add(d, m_qtable.AdvertisedValue(d, &m_routingTable));
+            double v = m_qtable.AdvertisedValue(d, &m_routingTable);
+            if (m_liuQAodv && v <= -m_vFail + 1e-9) continue; // STEP13b: Liu: advertise only usable routes
+            qv.Add(d, v);
         }
         p->ReplacePacketTag(qv);
+        onAir += qv.GetSerializedSize();
+    }
+    if (m_liuQAodv)
+    {
+        LiuStateTag ls; // STEP13b
+        Ptr<MobilityModel> mm = m_ipv4->GetObject<MobilityModel>();
+        if (mm)
+        {
+            ls.pos = mm->GetPosition();
+            ls.vel = mm->GetVelocity();
+        }
+        ls.qFree = 1.0 - double(m_queue.GetSize()) / std::max<uint32_t>(1, m_queue.GetMaxQueueLen());
+        p->ReplacePacketTag(ls);
+        onAir += ls.GetSerializedSize();
+    }
+    if (m_tagsOnAir)
+    {
+        p->AddPaddingAtEnd(onAir); // STEP13b
     }
     return p;
+}
+
+double
+RoutingProtocol::LiuReward(double eZ, double qFreeZ, const Vector& posZ, const Vector& velZ) const
+{
+    // STEP13b: Liu et al. (2026), Eqs. (12), (15), (16) for a same-medium radio link
+    // (elevation term inactive, equal weights, normalised by the active weights)
+    Ptr<MobilityModel> mm = m_ipv4->GetObject<MobilityModel>();
+    double d = mm ? CalculateDistance(mm->GetPosition(), posZ) : 0.0;
+    const double c = 0.94, R = m_liuRange;
+    double rq = (d < c * R) ? 1.0 : (d <= R ? 1.0 - d / R : 0.0);
+    Vector v = mm ? mm->GetVelocity() : Vector();
+    double dv = std::sqrt((v.x - velZ.x) * (v.x - velZ.x) + (v.y - velZ.y) * (v.y - velZ.y) +
+                          (v.z - velZ.z) * (v.z - velZ.z));
+    double cv = (dv < 1.0) ? 1.0 : 1.0 / dv;
+    return (0.2 * rq + 0.2 * eZ + 0.2 * qFreeZ + 0.2 * cv) / 0.8;
 }
 
 double
@@ -1668,11 +1792,24 @@ RoutingProtocol::RecvNbqmaodv(Ptr<Socket> socket)
             m_nbEnergy[sender] = nbi.GetEnergy();
         }
         QValueTag qv; // STEP10: remember the sender's advertised values V_sender(d)
-        if (m_nbqBootstrap && packet->PeekPacketTag(qv))
+        bool gotQv = m_nbqBootstrap && packet->PeekPacketTag(qv);
+        if (gotQv)
         {
             for (const auto& e : qv.Entries())
             {
                 m_qtable.SetNeighbourValue(sender, e.first, e.second);
+            }
+        }
+        LiuStateTag ls; // STEP13b: Liu et al. Eq. (14): Q_x(y,z) <- a[R(x,z) + g max_n Q_z(y,n)] + (1-a) Q_x(y,z)
+        if (m_liuQAodv && gotQv && packet->PeekPacketTag(ls))
+        {
+            double eZ = m_nbEnergy.count(sender) ? m_nbEnergy[sender] : 1.0;
+            double base = LiuReward(eZ, ls.qFree, ls.pos, ls.vel);
+            for (const auto& e : qv.Entries())
+            {
+                uint32_t hk = m_qtable.RecordHop(e.first, sender);
+                if (hk == 0) continue;
+                m_qtable.UpdateTowards(e.first, sender, base / hk + m_liuGamma * e.second, 0.5);
             }
         }
     }
@@ -2392,7 +2529,7 @@ RoutingProtocol::RecvError(Ptr<Packet> p, Ipv4Address src)
         SendRerrMessage(packet, precursors);
     }
     m_routingTable.InvalidateRoutesWithDst(unreachable);
-    if (m_nbqBootstrap)
+    if (m_nbqBootstrap && !m_liuQAodv) // STEP13b: no dead-end signalling in the Liu baseline
     {
         for (const auto& u : unreachable) // STEP10: src became a dead end for u.first
         {
@@ -2572,7 +2709,7 @@ RoutingProtocol::SendRerrWhenBreaksLinkToNextHop(Ipv4Address nextHop)
         return;
     }
     toNextHop.GetPrecursors(precursors);
-    if (m_nbqBootstrap)
+    if (m_nbqBootstrap && !m_liuQAodv) // STEP13b
     {
         m_qtable.MarkNeighbourDeadEnd(nextHop); // STEP10
     }

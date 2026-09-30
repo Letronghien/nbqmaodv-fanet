@@ -240,6 +240,12 @@ QTable::ReinitQValues(Ipv4Address dst)
 {
     auto it = m_records.find(dst);
     if (it == m_records.end()) return;
+    if (m_liu)
+    {
+        for (auto& r : it->second) // STEP13b: Liu et al. start from 0 (values come from rewards)
+            if (r.txCount == 0) r.qValue = 0.0;
+        return;
+    }
     if (m_bootstrap)
     {
         // STEP10: cost prior proportional to the hop count
@@ -324,6 +330,7 @@ QTable::BuildCandidates(const RoutingTableEntry& primary,
     uint32_t hcP = std::max<uint32_t>(1, primary.GetHop());
     double primQValue;
     if (primFound) primQValue = primQ;
+    else if (m_liu) primQValue = 0.0; // STEP13b
     else if (m_bootstrap) primQValue = -m_hcPriorCost * hcP; // STEP10: cost prior
     else
     {
@@ -387,6 +394,7 @@ QTable::UpdateQValue(Ipv4Address dst,
                      double delaySec,
                      double energyFraction)
 {
+    if (m_liu) return; // STEP13b: no MAC-feedback learning in the Liu baseline
     double reward = ComputeReward(ackSuccess, delaySec, energyFraction);
 
     auto it = m_records.find(dst);
@@ -430,6 +438,7 @@ QTable::UpdateQValueOrCreate(const RoutingTableEntry& rt,
                              double energyFraction)
 {
     EnsureRecord(rt);
+    if (m_liu) return; // STEP13b: values are updated only from received control messages
     UpdateQValue(rt.GetDestination(), rt.GetNextHop(),
                  ackSuccess, delaySec, energyFraction);
 }
@@ -579,6 +588,43 @@ QTable::KnownDestinations() const
     for (const auto& kv : m_records)
         if (!kv.second.empty()) out.push_back(kv.first);
     return out;
+}
+
+} // namespace nbqmaodv
+} // namespace ns3
+
+namespace ns3
+{
+namespace nbqmaodv
+{
+
+// STEP13b: Liu et al. baseline helpers
+bool
+QTable::UpdateTowards(Ipv4Address dst, Ipv4Address nh, double target, double alpha)
+{
+    auto it = m_records.find(dst);
+    if (it == m_records.end()) return false;
+    for (auto& r : it->second)
+    {
+        if (r.rt.GetNextHop() == nh)
+        {
+            r.qValue = (1.0 - alpha) * r.qValue + alpha * target;
+            ++r.txCount; // marks the entry as learned (ReinitQValues keeps it)
+            r.lastUpd = Simulator::Now();
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t
+QTable::RecordHop(Ipv4Address dst, Ipv4Address nh) const
+{
+    auto it = m_records.find(dst);
+    if (it == m_records.end()) return 0;
+    for (const auto& r : it->second)
+        if (r.rt.GetNextHop() == nh) return std::max<uint32_t>(1, r.rt.GetHop());
+    return 0;
 }
 
 } // namespace nbqmaodv

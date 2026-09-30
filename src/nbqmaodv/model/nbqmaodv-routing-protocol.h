@@ -34,6 +34,7 @@
 #include "nbqmaodv-rtable.h"
 #include "nbqmaodv-qtable.h"
 
+#include "ns3/vector.h"
 #include "ns3/ipv4-interface.h"
 #include "ns3/ipv4-l3-protocol.h"
 #include "ns3/ipv4-routing-protocol.h"
@@ -307,6 +308,12 @@ class RoutingProtocol : public Ipv4RoutingProtocol
   Time m_nbValueTtl{Seconds(3.0)}; ///< neighbour values older than this are ignored
   /// STEP5: epsilon-greedy next-hop selection at every forwarding node
   bool m_hopByHop{true};
+  bool m_tagsOnAir{false}; ///< STEP13b
+  /// STEP13b: Q-Learning AODV of Liu et al. (Electronics 15(16):3721, 2026) as external baseline
+  bool m_liuQAodv{false};
+  double m_liuGamma{1.0};
+  double m_liuRange{250.0};
+  double LiuReward(double eZ, double qFreeZ, const Vector& posZ, const Vector& velZ) const;
   /// STEP6: learn from real MAC outcome (AckedMpdu / DroppedMpdu) instead of
   /// the neighbour-freshness proxy
   bool m_useMacFeedback{true};

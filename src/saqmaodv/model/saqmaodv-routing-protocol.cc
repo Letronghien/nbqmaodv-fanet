@@ -392,6 +392,12 @@ RoutingProtocol::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&RoutingProtocol::m_hopByHop),
                           MakeBooleanChecker())
+            .AddAttribute("TagsOnAir",
+                          "STEP13b: pad packets with the bytes that the packet tags would occupy on air "
+                          "(previous hop on data, energy/values on control). false = ns-3 tags only",
+                          BooleanValue(false),
+                          MakeBooleanAccessor(&RoutingProtocol::m_tagsOnAir),
+                          MakeBooleanChecker())
             .AddAttribute("UseRerrBump",
                           "STEP4: raise epsilon on RERR / link break (paper Sec. 4.2); "
                           "false reproduces the pre-fix behaviour",
@@ -684,6 +690,13 @@ RoutingProtocol::RouteOutput(Ptr<Packet> p,
         {
             PrevHopTag self(chosenRt.GetInterface().GetLocal()); // STEP5
             p->ReplacePacketTag(self);
+            if (m_tagsOnAir && p) // STEP13b: carry the previous-hop address on air (4 B)
+            {
+                UdpHeader uh;
+                bool ctrl = p->PeekHeader(uh) && (uh.GetDestinationPort() == 654 || uh.GetSourcePort() == 654);
+                if (!ctrl)
+                    p->AddPaddingAtEnd(4);
+            }
         }
         if (m_useMacFeedback && p)
         {
@@ -1098,6 +1111,8 @@ RoutingProtocol::AttachNbInfo(Ptr<Packet> p)
 {
     NeighborInfoTag nbi(GetEnergyFraction()); // STEP8
     p->ReplacePacketTag(nbi);
+    if (m_tagsOnAir)
+        p->AddPaddingAtEnd(nbi.GetSerializedSize()); // STEP13b
     return p;
 }
 
